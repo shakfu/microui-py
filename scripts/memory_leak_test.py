@@ -214,7 +214,7 @@ class MemoryLeakDetector:
                     # Test textbox with various string lengths
                     tb = pymui.Textbox(128)
                     tb.text = test_string
-                    result = tb.text
+                    _ = tb.text
                     del tb
 
             if i % 500 == 0 and self.verbose:

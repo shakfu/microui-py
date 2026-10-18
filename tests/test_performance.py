@@ -118,7 +118,7 @@ class PerformanceBenchmarks:
                 self.ctx.layout_begin_column()
                 self.ctx.layout_width(200)
                 self.ctx.layout_height(30)
-                rect = self.ctx.layout_next()
+                self.ctx.layout_next()
                 self.ctx.layout_end_column()
                 self.ctx.end_window()
             self.ctx.end()

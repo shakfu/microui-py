@@ -47,9 +47,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install uv
-        uv sync --dev
-        # Install psutil for memory monitoring
-        uv add psutil
+        uv sync --dev --locked
 
     - name: Verify interpreter
       run: |
@@ -141,8 +139,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install uv
-        uv sync --dev
-        uv add psutil
+        uv sync --dev --locked
 
     - name: Verify interpreter
       run: |

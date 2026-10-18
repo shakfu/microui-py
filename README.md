@@ -465,6 +465,8 @@ rect = pymui.rect(10, 20, 100, 50)
 color = pymui.color(255, 128, 0, 255)
 ```
 
+Integer fields truncate floats toward zero: `Vec2(1.7, 2.2)` is `Vec2(1, 2)`. Color channels outside 0..255 raise `ValueError`.
+
 ### Text Input
 
 ```python
@@ -476,8 +478,12 @@ current_text = textbox.text
 # In UI context: pass the text in, keep what comes back
 result, current_text = ctx.textbox(current_text, 128, key="name")
 if result & pymui.Result.SUBMIT:
-    print(f"User submitted: {new_text}")
+    print(f"User submitted: {current_text}")
 ```
+
+Text longer than `buffer_size - 1` UTF-8 bytes is cut at the last whole character. Typed input stops at the same limit.
+
+microui textboxes have no caret: typing appends, Backspace deletes the last character. `Key` defines `SHIFT`, `CTRL`, `ALT`, `RETURN`, `BACKSPACE`, `ESCAPE`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME` and `END`. These set bits in `ctx.key_down` and `ctx.key_pressed`; microui widgets react only to the first five. `Event.key` is one of these or 0. For any other key, read `Event.keycode`, the raw SDL keycode.
 
 ## Styling
 

@@ -13,7 +13,7 @@ from pathlib import Path
 ROOTDIR = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(ROOTDIR))
 
-import pymui
+import pymui  # noqa: E402
 
 
 def manual_approach_demo():
@@ -53,7 +53,7 @@ def context_manager_demo():
     print("=" * 30)
 
     # Context manager automatically handles begin/end
-    with pymui.Context() as ctx:
+    with pymui.Context():
         # Create the same objects
         position = pymui.Vec2(30, 40)
         size = pymui.Rect(0, 0, 300, 200)
@@ -80,7 +80,7 @@ def exception_handling_demo():
 
     # Test that cleanup happens even with exceptions
     try:
-        with pymui.Context() as ctx:
+        with pymui.Context():
             # Create some objects
             textbox = pymui.Textbox(64)
             textbox.text = "About to raise exception..."
@@ -104,13 +104,13 @@ def nested_context_demo():
     print("=" * 30)
 
     # First context
-    with pymui.Context() as ctx1:
+    with pymui.Context():
         tb1 = pymui.Textbox(64)
         tb1.text = "First context"
         print(f"✅ Context 1: '{tb1.text}'")
 
     # Second context (completely separate)
-    with pymui.Context() as ctx2:
+    with pymui.Context():
         tb2 = pymui.Textbox(64)
         tb2.text = "Second context"
         print(f"✅ Context 2: '{tb2.text}'")
@@ -132,7 +132,7 @@ def real_world_example():
 
         def update_frame(self):
             """Simulate one frame update."""
-            with pymui.Context() as ctx:
+            with pymui.Context():
                 # In a real app, you'd have window operations here
                 # For demo, we'll just show state management
 

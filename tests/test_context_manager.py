@@ -86,7 +86,7 @@ class TestContextManager:
 
     def test_context_manager_textbox_operations(self):
         """Test context manager with safe textbox operations."""
-        with pymui.Context() as ctx:
+        with pymui.Context():
             # Test basic object creation (safe operations)
             vec = pymui.Vec2(10, 20)
             rect = pymui.Rect(10, 20, 100, 50)
@@ -198,7 +198,7 @@ class TestContextManagerIntegration:
 
     def test_context_manager_with_utility_functions(self):
         """Test context manager with utility functions."""
-        with pymui.Context() as ctx:
+        with pymui.Context():
             # Test clamp function
             result = pymui.clamp(15, 0, 10)
             assert result == 10
@@ -214,12 +214,12 @@ class TestContextManagerIntegration:
 
         # Test with assertion error
         with pytest.raises(AssertionError):
-            with pymui.Context() as ctx:
+            with pymui.Context():
                 assert False, "Intentional assertion error"
 
         # Test with value error
         with pytest.raises(ValueError):
-            with pymui.Context() as ctx:
+            with pymui.Context():
                 raise ValueError("Intentional value error")
 
         # Test with custom exception
@@ -227,7 +227,7 @@ class TestContextManagerIntegration:
             pass
 
         with pytest.raises(CustomError):
-            with pymui.Context() as ctx:
+            with pymui.Context():
                 raise CustomError("Intentional custom error")
 
 
@@ -238,7 +238,7 @@ class TestContextManagerDocumentation:
         """Test a README-style example using context manager."""
         # Simulate a simple UI update function
         def update_ui():
-            with pymui.Context() as ctx:
+            with pymui.Context():
                 # Create basic objects to verify context works
                 position = pymui.Vec2(10, 20)
                 size = pymui.Rect(0, 0, 200, 150)
@@ -278,7 +278,7 @@ class TestContextManagerDocumentation:
 
         # Context manager approach
         def context_manager_approach():
-            with pymui.Context() as ctx:
+            with pymui.Context():
                 # Same operations
                 textbox = pymui.Textbox(64)
                 textbox.text = "context_manager"

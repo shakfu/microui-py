@@ -161,12 +161,12 @@ class TestWindowContextManagerIntegration:
         with pymui.Context() as ctx:
             # Test with assertion error
             with pytest.raises(AssertionError):
-                with ctx.window("Error Test", 0, 0, 100, 100) as window:
+                with ctx.window("Error Test", 0, 0, 100, 100):
                     assert False, "Intentional assertion error"
 
             # Test with value error (a window may be begun once per frame)
             with pytest.raises(ValueError):
-                with ctx.window("Error Test 2", 0, 0, 100, 100) as window:
+                with ctx.window("Error Test 2", 0, 0, 100, 100):
                     raise ValueError("Intentional value error")
 
     def test_window_context_manager_invalid_parameters(self):
@@ -175,12 +175,12 @@ class TestWindowContextManagerIntegration:
             # These should raise errors when begin_window is called
             # Test empty title (should raise ValueError when begin_window is called)
             with pytest.raises(ValueError):
-                with ctx.window("", 0, 0, 100, 100) as window:
+                with ctx.window("", 0, 0, 100, 100):
                     pass
 
             # Test negative dimensions (should raise ValueError when begin_window is called)
             with pytest.raises(ValueError):
-                with ctx.window("Test", 0, 0, -100, 100) as window:
+                with ctx.window("Test", 0, 0, -100, 100):
                     pass
 
 

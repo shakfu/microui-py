@@ -6,13 +6,12 @@ This module focuses on property-based testing that avoids known issues
 while still providing comprehensive edge case coverage.
 """
 
-
+import pytest
 
 try:
-    from hypothesis import given, strategies as st, assume, settings
-    from hypothesis.strategies import integers, text, floats, booleans
+    from hypothesis import given
+    from hypothesis.strategies import integers, floats
 except ImportError:
-    import pytest
     pytest.skip("Hypothesis not available", allow_module_level=True)
 
 try:
@@ -218,14 +217,8 @@ class TestInputValidation:
     @given(invalid_buffer_size=integers(max_value=1))
     def test_textbox_invalid_buffer_size(self, invalid_buffer_size):
         """Textbox should reject invalid buffer sizes."""
-        try:
-            textbox = pymui.Textbox(invalid_buffer_size)
-            # If it doesn't raise, the buffer size might be adjusted
-            # Check that it's at least the minimum
-            assert invalid_buffer_size <= 1  # This should have failed
-        except ValueError:
-            # Expected behavior
-            pass
+        with pytest.raises(ValueError):
+            pymui.Textbox(invalid_buffer_size)
 
     @given(large_buffer_size=integers(min_value=100000, max_value=1000000))
     def test_textbox_large_buffer_size(self, large_buffer_size):
@@ -338,5 +331,4 @@ class TestEdgeCaseRegression:
 
 
 if __name__ == "__main__":
-    import pytest
     pytest.main([__file__, "-v"])

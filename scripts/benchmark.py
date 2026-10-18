@@ -16,7 +16,7 @@ from pathlib import Path
 TESTDIR = Path(__file__).parent.parent / "tests"
 sys.path.insert(0, str(TESTDIR))
 
-from test_performance import PerformanceBenchmarks
+from test_performance import PerformanceBenchmarks  # noqa: E402
 
 
 def main():

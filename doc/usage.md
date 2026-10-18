@@ -1,5 +1,7 @@
 # Usage
 
+This is the upstream microui manual for the C API. For the Python API, see [README.md](../README.md).
+
 * **[Overview](#overview)**
 * **[Getting Started](#getting-started)**
 * **[Layout System](#layout-system)**

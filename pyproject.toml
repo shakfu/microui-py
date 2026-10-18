@@ -30,6 +30,7 @@ dev = [
     "psutil>=5.9.0",
     "ruff>=0.14.14",
     "mypy>=1.19.1",
+    "twine>=7.0.0",
 ]
 
 [tool.cibuildwheel]

@@ -89,6 +89,14 @@ cdef extern from "microui.h":
         MU_KEY_ALT          = (1 << 2)
         MU_KEY_BACKSPACE    = (1 << 3)
         MU_KEY_RETURN       = (1 << 4)
+        MU_KEY_ESCAPE       = (1 << 5)
+        MU_KEY_DELETE       = (1 << 6)
+        MU_KEY_LEFT         = (1 << 7)
+        MU_KEY_RIGHT        = (1 << 8)
+        MU_KEY_UP           = (1 << 9)
+        MU_KEY_DOWN         = (1 << 10)
+        MU_KEY_HOME         = (1 << 11)
+        MU_KEY_END          = (1 << 12)
 
     # Forward declarations
     ctypedef struct mu_Context
@@ -424,6 +432,14 @@ cdef extern from "SDL2/SDL.h":
     cdef const SDL_Keycode SDLK_RETURN
     cdef const SDL_Keycode SDLK_KP_ENTER
     cdef const SDL_Keycode SDLK_BACKSPACE
+    cdef const SDL_Keycode SDLK_ESCAPE
+    cdef const SDL_Keycode SDLK_DELETE
+    cdef const SDL_Keycode SDLK_LEFT
+    cdef const SDL_Keycode SDLK_RIGHT
+    cdef const SDL_Keycode SDLK_UP
+    cdef const SDL_Keycode SDLK_DOWN
+    cdef const SDL_Keycode SDLK_HOME
+    cdef const SDL_Keycode SDLK_END
 
     cdef const Uint32 SDL_QUIT
     cdef const Uint32 SDL_MOUSEMOTION

@@ -904,8 +904,12 @@ int mu_textbox_raw(mu_Context* ctx, char* buf, int bufsz, mu_Id id, mu_Rect r, i
 
     if (ctx->focus == id) {
         /* handle text input */
-        int len = strlen(buf);
-        int n   = mu_min(bufsz - len - 1, (int)strlen(ctx->input_text));
+        int len   = strlen(buf);
+        int avail = strlen(ctx->input_text);
+        int n     = mu_min(bufsz - len - 1, avail);
+        /* pymui: do not split a utf-8 sequence when the buffer fills */
+        while (n > 0 && n < avail && (ctx->input_text[n] & 0xc0) == 0x80)
+            n--;
         if (n > 0) {
             memcpy(buf + len, ctx->input_text, n);
             len += n;

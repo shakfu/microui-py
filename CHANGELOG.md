@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `Key.ESCAPE`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME` and `END`. SDL key events map to them, so applications can test `ctx.key_pressed` instead of raw keycodes. microui widgets ignore them; textboxes still have no caret.
+
+### Fixed
+
+- Text that does not fit a textbox is cut at a character boundary. `textbox`, `Textbox.text` and microui's typed-input copy all cut by byte count. A split multi-byte character was decoded as U+FFFD, and the caller stored that back into its text.
+
+- `get_container` and `open_popup` work on a new `Context`. microui treats a pool slot as free when `last_update < frame`, so at frame 0 no slot was free. The guard raised "more than 48 containers in use". The frame counter now starts at 1. Requiring `begin()` first was the alternative, but it would break the supported use of `get_container` after a frame ends.
+
+- The renderer returns an error on a GL error during window init, so `renderer_init_window` raises `RuntimeError`. Previously an `assert` aborted debug builds, and Release builds skipped the check.
+
+- The leak-detection workflow ran `uv add psutil`. That added psutil to the runtime dependencies and rewrote `uv.lock`. It now runs `uv sync --dev --locked`.
+
+### Removed
+
+- `doc/SDL2/`: 78 vendored SDL2 headers that no build path used. The build finds SDL through `find_package(SDL2)`.
+
+### Changed
+
+- `twine` is a dev dependency, for `make check` and `make publish-test`.
+
+- README documents float truncation in `Vec2`/`Rect`/`Color`, textbox cut behaviour, and `Event.keycode` for keys microui does not define. `doc/usage.md` is marked as the upstream C manual.
+
 ## [0.3.0]
 
 ### Added

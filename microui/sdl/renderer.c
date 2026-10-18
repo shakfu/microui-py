@@ -1,6 +1,5 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
-#include <assert.h>
 #include "renderer.h"
 #include "atlas.inl"
 
@@ -275,7 +274,7 @@ int r_init_window(const char *title, int w, int h, int resizable) {
   tex_dirty = 0;
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  assert(glGetError() == 0);
+  if (glGetError() != GL_NO_ERROR) { r_shutdown(); return -1; }
   return 0;
 }
 

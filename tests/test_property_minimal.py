@@ -9,8 +9,8 @@ to avoid crashes while still providing comprehensive edge case testing.
 
 
 try:
-    from hypothesis import given, strategies as st
-    from hypothesis.strategies import integers, floats
+    from hypothesis import given
+    from hypothesis.strategies import integers
 except ImportError:
     import pytest
     pytest.skip("Hypothesis not available", allow_module_level=True)

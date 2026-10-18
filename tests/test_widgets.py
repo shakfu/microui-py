@@ -146,6 +146,47 @@ def test_textbox_keeps_focus_across_frames():
     assert texts == ["", "abc"]
 
 
+def test_textbox_cuts_on_character_boundary():
+    out = []
+
+    def ui(ctx):
+        out.append(ctx.textbox("éééé", 6)[1])
+
+    Harness(ui).frame()
+    assert out == ["éé"]
+    tb = pymui.Textbox(6)
+    tb.text = "éééé"
+    assert tb.text == "éé"
+
+
+def test_typed_input_does_not_split_character_when_full():
+    text = ["ab"]
+
+    def ui(ctx):
+        ctx.layout_set_next(ROW[0], ABS)
+        _, text[0] = ctx.textbox(text[0], 4, key="t")  # room for 1 byte
+
+    h = Harness(ui)
+    h.click(50, ROW[0].y + 10)
+    h.ctx.input_text("é")
+    h.frame()
+    assert text[0] == "ab"
+    h.ctx.input_text("c")
+    h.frame()
+    assert text[0] == "abc"
+
+
+def test_get_container_before_first_frame():
+    ctx = pymui.Context()
+    win = ctx.get_container("W")
+    win.rect = Rect(5, 5, 50, 50)
+    ctx.open_popup("P")
+    with ctx:
+        with ctx.window("W", 0, 0, 100, 100):
+            pass
+    assert ctx.get_container("W").rect.w == 50
+
+
 def test_textbox_submit_flag():
     res = []
     text = ["x"]

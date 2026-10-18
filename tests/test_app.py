@@ -98,6 +98,34 @@ def test_sdl_event_translation(raw, expected):
     assert fields(translate(*raw)) == expected
 
 
+@pytest.mark.parametrize(
+    "sym, key",
+    [
+        (27, Key.ESCAPE),
+        (127, Key.DELETE),
+        (0x40000050, Key.LEFT),
+        (0x4000004F, Key.RIGHT),
+        (0x40000052, Key.UP),
+        (0x40000051, Key.DOWN),
+        (0x4000004A, Key.HOME),
+        (0x4000004D, Key.END),
+    ],
+)
+def test_navigation_keys_mapped(sym, key):
+    assert translate("keydown", sym).key == key
+    app = App()
+    app.handle_event(translate("keydown", sym))
+    assert app.ctx.key_down == key
+    assert app.ctx.key_pressed == key
+
+
+def test_key_bits_distinct():
+    names = [n for n in dir(Key) if n.isupper()]
+    bits = [getattr(Key, n) for n in names]
+    assert len(set(bits)) == len(bits) == 13
+    assert all(b and b & (b - 1) == 0 for b in bits)
+
+
 def test_sdl_text_translation():
     assert translate("text", text="h\u00e9".encode()).text == "h\u00e9"
     assert translate("text", text=b"\xff").text == "\ufffd"

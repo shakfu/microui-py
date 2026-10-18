@@ -207,24 +207,14 @@ class TestMemorySafety:
     def test_error_conditions_safety(self):
         """Test that error conditions don't cause memory leaks."""
         # Test invalid buffer sizes
-        try:
-            tb = pymui.Textbox(0)  # Should fail
-        except ValueError:
-            pass
+        with pytest.raises(ValueError):
+            pymui.Textbox(0)
+        with pytest.raises(ValueError):
+            pymui.Textbox(-1)
 
-        try:
-            tb = pymui.Textbox(-1)  # Should fail
-        except ValueError:
-            pass
-
-        # Test context operations (avoiding ctx.text() which causes crashes)
         ctx = pymui.Context()
-        try:
-            # Test basic operations that should be safe
-            ctx.begin()
-            ctx.end()
-        except:
-            pass
+        ctx.begin()
+        ctx.end()
 
         del ctx
 

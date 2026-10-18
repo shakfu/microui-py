@@ -71,6 +71,15 @@ cdef int _channel(int v) except -1:
     return v
 
 
+cdef Py_ssize_t _utf8_cut(bytes b, Py_ssize_t n):
+    """Largest length <= n that does not split a UTF-8 sequence in `b`."""
+    if n >= len(b):
+        return len(b)
+    while n > 0 and (b[n] & 0xC0) == 0x80:
+        n -= 1
+    return n
+
+
 cdef bytes _to_bytes(object data):
     """Encode an ID key: bytes pass through, everything else via str()."""
     if isinstance(data, bytes):
@@ -541,6 +550,8 @@ cdef class Context:
         if self.ptr is NULL:
             raise MemoryError("Failed to allocate Context")
         mu_init(self.ptr)
+        # Pool slots are free when last_update < frame; at frame 0 none would be.
+        self.ptr.frame = 1
         self.ptr.text_width = text_width
         self.ptr.text_height = text_height
         self.current_command = NULL
@@ -667,10 +678,8 @@ cdef class Context:
         """Move pending input into microui's buffer, cutting on a UTF-8 boundary."""
         cdef Py_ssize_t used = strlen(self.ptr.input_text)
         cdef Py_ssize_t room = <Py_ssize_t>sizeof(self.ptr.input_text) - 1 - used
-        cdef Py_ssize_t cut = min(room, len(self._pending_text))
+        cdef Py_ssize_t cut = _utf8_cut(self._pending_text, max(room, 0))
         cdef bytes chunk
-        while 0 < cut < len(self._pending_text) and (self._pending_text[cut] & 0xC0) == 0x80:
-            cut -= 1
         if cut <= 0:
             return
         chunk = self._pending_text[:cut]
@@ -961,7 +970,8 @@ cdef class Context:
 
         Args:
             buf (str): Current text
-            bufsz (int): Buffer size in bytes, including the terminator (2..1MB)
+            bufsz (int): Buffer size in bytes, including the terminator (2..1MB).
+                Longer text is cut at the last whole character that fits.
             opt (int, optional): Option flags
             key (optional): ID key. Defaults to the caller's code location.
 
@@ -975,7 +985,7 @@ cdef class Context:
             raise ValueError("Buffer size too large (max 1MB)")
         cdef bytes b_buf = buf.encode('utf-8')
         cdef bytes bkey = self._widget_key(key)
-        cdef int copy_len = min(len(b_buf), bufsz - 1)
+        cdef int copy_len = _utf8_cut(b_buf, bufsz - 1)
         cdef int result
         cdef mu_Id wid
         cdef char* c_buf
@@ -1692,6 +1702,14 @@ class Key:
     ALT = MU_KEY_ALT
     BACKSPACE = MU_KEY_BACKSPACE
     RETURN = MU_KEY_RETURN
+    ESCAPE = MU_KEY_ESCAPE
+    DELETE = MU_KEY_DELETE
+    LEFT = MU_KEY_LEFT
+    RIGHT = MU_KEY_RIGHT
+    UP = MU_KEY_UP
+    DOWN = MU_KEY_DOWN
+    HOME = MU_KEY_HOME
+    END = MU_KEY_END
 
 
 # Textbox class for persistent state
@@ -1781,14 +1799,7 @@ cdef class Textbox:
 
     @text.setter
     def text(self, str value):
-        """Set the textbox content with enhanced memory safety.
-
-        Args:
-            value (str): The new text content
-
-        Raises:
-            ValueError: If the text is too long for the buffer
-        """
+        """Set the textbox content, cut at the last whole character that fits."""
         if value is None:
             value = ""
 
@@ -1801,7 +1812,7 @@ cdef class Textbox:
             raise ValueError("Buffer too small")
 
         # Calculate safe copy length with explicit bounds check
-        copy_len = min(encoded_len, self.buffer_size - 1)
+        copy_len = _utf8_cut(b_value, max(self.buffer_size - 1, 0))
         if copy_len < 0:
             copy_len = 0
 
@@ -1815,8 +1826,7 @@ cdef class Textbox:
 
         # Update current text (potentially truncated)
         if copy_len < encoded_len:
-            # Text was truncated, decode what actually fits
-            self.current_text = self.buffer[:copy_len].decode('utf-8', errors='replace')
+            self.current_text = self.buffer[:copy_len].decode('utf-8')
         else:
             self.current_text = value
 
@@ -1922,6 +1932,14 @@ cdef int _map_key(SDL_Keycode k):
     if k == SDLK_LALT or k == SDLK_RALT: return MU_KEY_ALT
     if k == SDLK_RETURN or k == SDLK_KP_ENTER: return MU_KEY_RETURN
     if k == SDLK_BACKSPACE: return MU_KEY_BACKSPACE
+    if k == SDLK_ESCAPE: return MU_KEY_ESCAPE
+    if k == SDLK_DELETE: return MU_KEY_DELETE
+    if k == SDLK_LEFT: return MU_KEY_LEFT
+    if k == SDLK_RIGHT: return MU_KEY_RIGHT
+    if k == SDLK_UP: return MU_KEY_UP
+    if k == SDLK_DOWN: return MU_KEY_DOWN
+    if k == SDLK_HOME: return MU_KEY_HOME
+    if k == SDLK_END: return MU_KEY_END
     return 0
 
 

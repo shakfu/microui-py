@@ -13,7 +13,7 @@ from pathlib import Path
 ROOTDIR = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(ROOTDIR))
 
-import pymui
+import pymui  # noqa: E402
 
 
 def basic_window_demo():

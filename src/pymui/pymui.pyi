@@ -300,6 +300,14 @@ class Key:
     ALT: int
     BACKSPACE: int
     RETURN: int
+    ESCAPE: int
+    DELETE: int
+    LEFT: int
+    RIGHT: int
+    UP: int
+    DOWN: int
+    HOME: int
+    END: int
 
 class EventType:
     QUIT: int

@@ -106,7 +106,15 @@ enum {
     MU_KEY_CTRL      = (1 << 1),
     MU_KEY_ALT       = (1 << 2),
     MU_KEY_BACKSPACE = (1 << 3),
-    MU_KEY_RETURN    = (1 << 4)
+    MU_KEY_RETURN    = (1 << 4),
+    MU_KEY_ESCAPE    = (1 << 5),
+    MU_KEY_DELETE    = (1 << 6),
+    MU_KEY_LEFT      = (1 << 7),
+    MU_KEY_RIGHT     = (1 << 8),
+    MU_KEY_UP        = (1 << 9),
+    MU_KEY_DOWN      = (1 << 10),
+    MU_KEY_HOME      = (1 << 11),
+    MU_KEY_END       = (1 << 12)
 };
 
 
