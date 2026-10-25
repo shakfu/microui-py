@@ -4,7 +4,27 @@
 
 ### Added
 
-- `Key.ESCAPE`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME` and `END`. SDL key events map to them, so applications can test `ctx.key_pressed` instead of raw keycodes. microui widgets ignore them; textboxes still have no caret.
+- `Key.ESCAPE`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME`, `END` and `TAB`. SDL key events map to them, so applications can test `ctx.key_pressed` instead of raw keycodes.
+
+- Textbox caret and selection. Left/Right, Home/End and clicks move the caret; Shift extends the selection, as does a mouse drag, which continues past the box edge. Typing, Backspace and Delete replace the selection. `ctx.input_select_all()`.
+
+- Clipboard: `ctx.input_copy()`, `input_cut()`, `input_paste()`, `get_clipboard_text()`, `set_clipboard_text()`. Copy and cut take the selection. `App` maps Ctrl+A/C/X/V, or Cmd on macOS. Without SDL video the clipboard is a process-local string, so headless tests work.
+
+- Tab and Shift+Tab cycle focus through the frame's textboxes in call order. Code that already handled Tab sees both effects.
+
+- Images: `pymui.Image` uploads RGBA pixels to a texture; `ctx.image()` and `ctx.draw_image()` draw it. Closing the window invalidates every `Image`; using one afterwards raises instead of drawing a stale texture.
+
+- HiDPI. Coordinates stay in logical pixels; the renderer scales to the drawable and rasterizes loaded fonts at device resolution. `renderer_get_scale()` returns the ratio. Rendering was checked at scale 2 (see `doc/development.md`); mouse input was not.
+
+- `App(idle_timeout=...)` redraws only after input or once per timeout, instead of continuously. One extra frame follows each input, because microui settles hover and popups a frame late. `app.redraw()` requests a frame; `wait_event()` is the underlying call.
+
+- Events: horizontal and flipped wheel scrolling, `Event.clicks`, `Event.mod` with `Mod` bits, `EventType.DROPFILE`, `FOCUS_GAINED` and `FOCUS_LOST`. `App.drop_file(path)` and `app.focused` expose the last three. `set_cursor(Cursor.*)`.
+
+- `pymui.widgets`: `menu_bar`, `tabs`, `combo`, `listbox`, `progress_bar`, in pure Python over the custom-widget API. Menus and combo lists open below their button, not at the mouse as microui popups do.
+
+- `pymui.testing`: headless `click`, `press`, `type_text`, `run_frame`, `drawn_text`, and `sdl_event`, the former private `_translate_sdl_event` hook. `make test-window` adds tests that need a GL window.
+
+- `examples/desktop_demo.py`.
 
 ### Fixed
 
@@ -21,6 +41,12 @@
 - `doc/SDL2/`: 78 vendored SDL2 headers that no build path used. The build finds SDL through `find_package(SDL2)`.
 
 ### Changed
+
+- Custom renderers must handle `Command.IMAGE`. `Command.MAX` rose by one.
+
+- `App` scrolls horizontally on horizontal wheel input; `Event.x` of `MOUSEWHEEL` was always 0.
+
+- The vendored microui has more pymui patches: textbox editing, caret and selection fields in `mu_Context`, and `MU_COMMAND_IMAGE`. C code built against `microui.h` must be rebuilt.
 
 - `twine` is a dev dependency, for `make check` and `make publish-test`.
 

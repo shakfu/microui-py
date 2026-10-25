@@ -131,6 +131,24 @@ uv run python scripts/benchmark.py --compare
 `tests/test_performance.py` runs the same suite and fails if any benchmark
 raises or averages over 10 ms.
 
+## HiDPI check
+
+`make test-window` runs at the display's scale, usually 1.0. On Linux with
+GNOME, a nested Wayland compositor gives scale 2:
+
+```bash
+MUTTER_DEBUG_DUMMY_MONITOR_SCALES=2 MUTTER_DEBUG_DUMMY_MODE_SPECS=1280x800 \
+  dbus-run-session -- gnome-shell --nested --wayland --no-x11 \
+  --wayland-display=pymui-hidpi &
+SDL_VIDEODRIVER=wayland WAYLAND_DISPLAY=pymui-hidpi \
+  uv run python examples/desktop_demo.py
+```
+
+`dbus-run-session` keeps the nested shell off the desktop's session bus.
+`renderer_get_scale()` should return 2.0, and loaded-font text should be
+antialiased at device resolution, not pixel-doubled. Mouse input in the
+nested window was not exercised.
+
 ## CI
 
 `.github/workflows/memory-leak-detection.yml` runs on pushes and pull requests

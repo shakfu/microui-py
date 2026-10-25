@@ -14,12 +14,14 @@ from .pymui import (
     Window,
     ContainerWrapper,
     Textbox,
+    Image,
     DuplicateIDError,
     # Command classes
     BaseCommand,
     RectCommand,
     TextCommand,
     IconCommand,
+    ImageCommand,
     ClipCommand,
     JumpCommand,
     # Constants
@@ -31,9 +33,15 @@ from .pymui import (
     Option,
     Mouse,
     Key,
+    Mod,
+    Cursor,
     EventType,
     Event,
     poll_event,
+    wait_event,
+    get_clipboard_text,
+    set_clipboard_text,
+    set_cursor,
     # Renderer functions
     render,
     load_font,
@@ -51,6 +59,7 @@ from .pymui import (
     renderer_set_clip_rect,
     renderer_clear,
     renderer_present,
+    renderer_get_scale,
 )
 
 __all__ = [
@@ -69,12 +78,14 @@ __all__ = [
     "Window",
     "ContainerWrapper",
     "Textbox",
+    "Image",
     "DuplicateIDError",
     # Command classes
     "BaseCommand",
     "RectCommand",
     "TextCommand",
     "IconCommand",
+    "ImageCommand",
     "ClipCommand",
     "JumpCommand",
     # Constants
@@ -86,9 +97,15 @@ __all__ = [
     "Option",
     "Mouse",
     "Key",
+    "Mod",
+    "Cursor",
     "EventType",
     "Event",
     "poll_event",
+    "wait_event",
+    "get_clipboard_text",
+    "set_clipboard_text",
+    "set_cursor",
     # Renderer functions
     "render",
     "load_font",
@@ -106,4 +123,5 @@ __all__ = [
     "renderer_set_clip_rect",
     "renderer_clear",
     "renderer_present",
+    "renderer_get_scale",
 ]

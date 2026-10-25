@@ -3,9 +3,9 @@
 import pytest
 
 import pymui
-from pymui import Event, EventType, Key, Mouse
+from pymui import Event, EventType, Key, Mouse, testing
 from pymui.app import App
-from pymui.pymui import _translate_sdl_event as translate
+from pymui.testing import sdl_event as translate
 
 # SDL2 ABI values for building raw events.
 SDL_BUTTON_RIGHT = 3
@@ -109,6 +109,7 @@ def test_sdl_event_translation(raw, expected):
         (0x40000051, Key.DOWN),
         (0x4000004A, Key.HOME),
         (0x4000004D, Key.END),
+        (9, Key.TAB),
     ],
 )
 def test_navigation_keys_mapped(sym, key):
@@ -122,7 +123,7 @@ def test_navigation_keys_mapped(sym, key):
 def test_key_bits_distinct():
     names = [n for n in dir(Key) if n.isupper()]
     bits = [getattr(Key, n) for n in names]
-    assert len(set(bits)) == len(bits) == 13
+    assert len(set(bits)) == len(bits) == 14
     assert all(b and b & (b - 1) == 0 for b in bits)
 
 
@@ -193,3 +194,117 @@ def test_frame_rate_cap_disabled_and_validated(monkeypatch):
             App(max_fps=bad)
         with pytest.raises(ValueError):
             app.max_fps = bad
+
+
+SDL_WINDOWEVENT_FOCUS_GAINED = 12
+SDL_WINDOWEVENT_FOCUS_LOST = 13
+SDL_MOUSEWHEEL_FLIPPED = 1
+KMOD_LCTRL = 0x0040
+
+
+def test_wheel_horizontal_and_flipped():
+    ev = translate("wheel", 1, 3)
+    assert (ev.x, ev.y) == (3, 1)
+    ev = translate("wheel", 1, 3, SDL_MOUSEWHEEL_FLIPPED)
+    assert (ev.x, ev.y) == (-3, -1)
+
+
+def test_double_click_count():
+    assert translate("down", 1, 5, 6, d=2).clicks == 2
+
+
+def test_key_modifiers():
+    ev = translate("keydown", ord("c"), KMOD_LCTRL)
+    assert ev.mod & pymui.Mod.CTRL
+    assert not ev.mod & pymui.Mod.SHIFT
+
+
+def test_drop_file_event():
+    ev = translate("drop", text=b"/tmp/a b.txt")
+    assert (ev.type, ev.text) == (EventType.DROPFILE, "/tmp/a b.txt")
+
+
+@pytest.mark.parametrize(
+    "code, kind",
+    [(SDL_WINDOWEVENT_FOCUS_GAINED, EventType.FOCUS_GAINED),
+     (SDL_WINDOWEVENT_FOCUS_LOST, EventType.FOCUS_LOST)],
+)
+def test_focus_events(code, kind):
+    assert translate("window", code).type == kind
+
+
+def test_app_horizontal_scroll():
+    app = App()
+    ctx = app.ctx
+
+    def ui(ctx):
+        with ctx.window("S", 0, 0, 100, 100) as w:
+            if w.is_open:
+                ctx.layout_row([400], 400)
+                ctx.label("wide")
+
+    ctx.input_mousemove(50, 50)
+    testing.run_frame(ctx, ui)
+    testing.run_frame(ctx, ui)
+    app.handle_event(Event(EventType.MOUSEWHEEL, 2, -1))
+    testing.run_frame(ctx, ui)
+    scroll = ctx.get_container("S").scroll
+    assert scroll.x > 0 and scroll.y > 0
+
+
+def test_app_drop_and_focus():
+    dropped = []
+
+    class MyApp(App):
+        def drop_file(self, path):
+            dropped.append(path)
+
+    app = MyApp()
+    app.handle_event(Event(EventType.DROPFILE, text="/x"))
+    app.handle_event(Event(EventType.FOCUS_LOST))
+    assert dropped == ["/x"] and app.focused is False
+    app.handle_event(Event(EventType.FOCUS_GAINED))
+    assert app.focused is True
+
+
+def test_idle_step_waits_only_when_no_redraw_is_due(monkeypatch):
+    import pymui.app as app_mod
+
+    waits, frames = [], []
+    queue = []
+    monkeypatch.setattr(app_mod, "render", lambda ctx, bg: None)
+    monkeypatch.setattr(app_mod, "poll_event", lambda: queue.pop(0) if queue else None)
+
+    def fake_wait(timeout):
+        waits.append(timeout)
+        return Event(EventType.MOUSEMOTION, 1, 1) if len(waits) == 2 else None
+
+    monkeypatch.setattr(app_mod, "wait_event", fake_wait)
+    app = App(idle_timeout=0.25, max_fps=None)
+
+    def frame(ctx):
+        frames.append(1)
+
+    app.step(frame)  # first frame: no wait
+    assert waits == []
+    app.step(frame)  # waits, times out, draws anyway
+    assert waits == [0.25]
+    app.step(frame)  # waits, gets input
+    app.step(frame)  # settle frame after input: no wait
+    assert waits == [0.25, 0.25]
+    app.redraw()
+    app.step(frame)
+    assert waits == [0.25, 0.25]
+    app.step(frame)
+    assert waits == [0.25, 0.25, 0.25]
+    assert len(frames) == 6
+
+
+def test_continuous_step_never_waits(monkeypatch):
+    import pymui.app as app_mod
+
+    monkeypatch.setattr(app_mod, "render", lambda ctx, bg: None)
+    monkeypatch.setattr(app_mod, "wait_event", lambda t: pytest.fail("waited"))
+    app = App(max_fps=None)
+    app.step(lambda ctx: None)
+    app.step(lambda ctx: None)

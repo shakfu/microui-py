@@ -325,6 +325,10 @@ if __name__ == "__main__":
 
 `App.run()` blocks until the window closes or `app.quit()` is called. The renderer requests vsync; `App(max_fps=120)` (the default) caps the loop where the driver ignores it. Pass `max_fps=None` to disable the cap. For a custom loop, call `app.step(frame)` per iteration, or use `pymui.render(ctx, bg)` with `renderer_init_window()` directly.
 
+`App(idle_timeout=1.0)` redraws only after input, or once per `idle_timeout` seconds without it. Each input frame is followed by one more, because microui settles hover and popups a frame late. Call `app.redraw()` after changing state from outside the UI.
+
+Other events: override `drop_file(path)` to receive files dropped on the window. `app.focused` tracks window focus. `Event.clicks` is 2 on a double click. `pymui.set_cursor(pymui.Cursor.HAND)` changes the mouse cursor.
+
 ## Available Widgets
 
 ### Basic Controls
@@ -443,6 +447,22 @@ def toggle(ctx, name, on):
     return on
 ```
 
+### Composite Widgets
+
+`pymui.widgets` builds controls that microui lacks from the calls above:
+
+```python
+from pymui import widgets
+
+choice = widgets.menu_bar(ctx, {"File": ["Open", "Quit"]})  # ("File", "Quit") or None
+tab = widgets.tabs(ctx, "main", ["General", "Advanced"], tab)
+changed, size = widgets.combo(ctx, "size", ["S", "M", "L"], size)
+changed, row = widgets.listbox(ctx, "files", names, row, height=120)
+widgets.progress_bar(ctx, done, 0, total)
+```
+
+The `name` argument is the ID key and popup/panel name; keep it unique within the window. Menus and combo lists open below their button.
+
 ## Data Types
 
 ### Core Types
@@ -483,7 +503,30 @@ if result & pymui.Result.SUBMIT:
 
 Text longer than `buffer_size - 1` UTF-8 bytes is cut at the last whole character. Typed input stops at the same limit.
 
-microui textboxes have no caret: typing appends, Backspace deletes the last character. `Key` defines `SHIFT`, `CTRL`, `ALT`, `RETURN`, `BACKSPACE`, `ESCAPE`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME` and `END`. These set bits in `ctx.key_down` and `ctx.key_pressed`; microui widgets react only to the first five. `Event.key` is one of these or 0. For any other key, read `Event.keycode`, the raw SDL keycode.
+The focused textbox has a caret. Left/Right move it by one character, Home/End jump to either end, a click places it, Backspace and Delete remove the character before or after it.
+
+Selection: Shift with Left/Right/Home/End or a click extends it, as does a mouse drag, which continues past the box edge. Typing, Backspace and Delete replace the selection; Left/Right without Shift collapse it to that end. `ctx.input_select_all()` selects everything.
+
+Tab and Shift+Tab move focus through the frame's textboxes in call order, wrapping at either end.
+
+Clipboard: `ctx.input_copy()` and `ctx.input_cut()` act on the focused textbox's selection during the next frame; with nothing selected they do nothing. `ctx.input_paste()` types the clipboard text at the caret, replacing the selection. `App` maps Ctrl+A/C/X/V (Cmd on macOS) to these. `get_clipboard_text()` and `set_clipboard_text()` use the system clipboard while a window is open, and a process-local string otherwise.
+
+`Key` defines `SHIFT`, `CTRL`, `ALT`, `RETURN`, `BACKSPACE`, `ESCAPE`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME`, `END` and `TAB`. These set bits in `ctx.key_down` and `ctx.key_pressed`. `Event.key` is one of these or 0. For any other key, read `Event.keycode`, the raw SDL keycode, and `Event.mod`, a mask of `Mod` bits.
+
+### Images
+
+```python
+img = pymui.Image(w, h, rgba_bytes)       # needs an open window
+img = pymui.Image(*pil.size, pil.convert("RGBA").tobytes())  # from Pillow
+
+ctx.layout_row([64], 64)
+ctx.image(img)                            # fill the next cell
+ctx.draw_image(img, pymui.Rect(x, y, w, h), pymui.Color(255, 255, 255, 128))
+img.update(new_rgba_bytes)                # same size
+img.close()                               # or let it be collected
+```
+
+Images are scaled with linear filtering. Closing the window invalidates every `Image`; using one afterwards raises `RuntimeError`.
 
 ## Styling
 
@@ -568,6 +611,8 @@ pymui/
 ├── src/pymui/          # Main Python package
 │   ├── pymui.pyx      # Cython wrapper
 │   ├── app.py         # SDL window and event loop
+│   ├── widgets.py     # menu bar, tabs, combo, listbox, progress bar
+│   ├── testing.py     # headless input and frame helpers
 │   └── __init__.py    # Package init
 ├── microui/           # Vendored microui, SDL/OpenGL renderer, stb_truetype
 ├── tests/            # Test suite
@@ -583,6 +628,7 @@ pymui/
 |-|-|-|
 | `examples/showcase.py` | `make showcase` | Every feature: widgets, stable IDs, scopes, custom widgets, layout, live guard errors, style editing, TrueType fonts |
 | `examples/demo.py` | `make demo` | Port of microui's C demo |
+| `examples/desktop_demo.py` | `uv run python examples/desktop_demo.py` | Menu bar, tabs, combo, listbox, progress bar, caret editing, clipboard, images, file drop, idle redraw |
 | `examples/context_manager_demo.py` | `uv run python examples/context_manager_demo.py` | Frame context manager, printed to the console |
 | `examples/window_context_demo.py` | `uv run python examples/window_context_demo.py` | Window context manager, printed to the console |
 
@@ -598,6 +644,8 @@ pymui.reset_font()                                                       # back 
 ```
 
 The font is global: it applies to text measurement in every `Context` (and so to layout) and to rendering. Characters missing from the font draw as the font's own missing-glyph box. Glyphs are rasterized on first use into a 512x512 texture shared with the icons.
+
+On HiDPI displays the window has more device pixels than logical ones. Layout, input and `Rect`s stay in logical pixels; the renderer scales to the drawable and rasterizes loaded fonts at device resolution. The bitmap font and icons are scaled up. `renderer_get_scale()` returns the ratio.
 
 Only load trusted font files. The renderer uses [stb_truetype](https://github.com/nothings/stb), which does not validate font tables; pymui rejects files whose table directory points past the end of the data (truncated files) but cannot make a crafted file safe.
 
@@ -615,6 +663,8 @@ def draw_frame(ctx, backend):
             backend.draw_text(cmd.text, cmd.pos, cmd.color)
         elif cmd.type == pymui.Command.ICON:
             backend.draw_icon(cmd.icon_id, cmd.rect, cmd.color)
+        elif cmd.type == pymui.Command.IMAGE:
+            backend.draw_image(cmd.image_id, cmd.rect, cmd.color)  # an OpenGL texture name
         elif cmd.type == pymui.Command.CLIP:
             backend.set_clip(cmd.rect)
 ```
@@ -625,7 +675,19 @@ Layout measures text with the current pymui font, so a custom renderer should dr
 
 ```bash
 make test           # all tests, headless
+make test-window    # also image, cursor and clipboard tests; opens windows
 make memory-test    # RSS and tracemalloc growth
+```
+
+`pymui.testing` drives a UI without a window, for testing your own code:
+
+```python
+from pymui import testing
+
+testing.click(ctx, ui, x, y)             # ui(ctx) builds the frame
+testing.type_text(ctx, ui, "hello")
+testing.press(ctx, ui, pymui.Key.TAB)
+assert "Saved" in testing.drawn_text(ctx)
 ```
 
 See [doc/development.md](doc/development.md) for valgrind, AddressSanitizer and benchmark instructions.
@@ -645,12 +707,15 @@ The type stubs in [`src/pymui/pymui.pyi`](src/pymui/pymui.pyi) list every class,
 | Widgets | `button`, `checkbox`, `slider`, `number`, `textbox`, `label`, `text`, `header`, `treenode` |
 | Layout | `layout_row`, `layout_width`, `layout_height`, `column`, `layout_set_next`, `layout_next` |
 | IDs | `id_scope`, `push_id`, `pop_id`, `get_id`, `key=` arguments |
-| Custom widgets | `update_control`, `draw_control_frame`, `draw_control_text`, `draw_rect`, `draw_box`, `draw_text`, `draw_icon`, `mouse_over` |
+| Custom widgets | `update_control`, `draw_control_frame`, `draw_control_text`, `draw_rect`, `draw_box`, `draw_text`, `draw_icon`, `draw_image`, `image`, `mouse_over` |
+| Composite widgets | `pymui.widgets`: `menu_bar`, `tabs`, `combo`, `listbox`, `progress_bar` |
 | Input state | `hover`, `focus`, `mouse_pos`, `mouse_delta`, `mouse_down`, `mouse_pressed`, `key_down`, `key_pressed` |
-| Input | `input_mousemove`, `input_mousedown`, `input_mouseup`, `input_scroll`, `input_keydown`, `input_keyup`, `input_text` |
-| Rendering | `render`, `renderer_init_window`, `renderer_resize`, `renderer_shutdown`, `next_command`, `load_font`, `reset_font` |
-| Events | `poll_event`, `Event`, `EventType` |
-| App | `pymui.app.App`: `frame`, `run`, `step`, `quit`, `handle_event` |
+| Input | `input_mousemove`, `input_mousedown`, `input_mouseup`, `input_scroll`, `input_keydown`, `input_keyup`, `input_text`, `input_copy`, `input_cut`, `input_paste` |
+| Rendering | `render`, `renderer_init_window`, `renderer_resize`, `renderer_shutdown`, `renderer_get_scale`, `next_command`, `load_font`, `reset_font`, `Image` |
+| Events | `poll_event`, `wait_event`, `Event`, `EventType`, `Mod` |
+| Desktop | `get_clipboard_text`, `set_clipboard_text`, `set_cursor`, `Cursor` |
+| App | `pymui.app.App`: `frame`, `run`, `step`, `quit`, `redraw`, `drop_file`, `handle_event` |
+| Testing | `pymui.testing`: `run_frame`, `commands`, `drawn_text`, `click`, `press`, `type_text`, `sdl_event` |
 
 ### Result Flags
 

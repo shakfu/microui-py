@@ -67,6 +67,10 @@ class Context:
     def input_keydown(self, key: int) -> None: ...
     def input_keyup(self, key: int) -> None: ...
     def input_text(self, text: str) -> None: ...
+    def input_copy(self) -> None: ...
+    def input_cut(self) -> None: ...
+    def input_paste(self) -> None: ...
+    def input_select_all(self) -> None: ...
     def layout_row(
         self, widths: list[int] | tuple[int, ...] | None, height: int
     ) -> None: ...
@@ -125,9 +129,11 @@ class Context:
     def draw_box(self, rect: Rect, color: Color) -> None: ...
     def draw_text(self, text: str, pos: Vec2, color: Color) -> None: ...
     def draw_icon(self, id: int, rect: Rect, color: Color) -> None: ...
+    def draw_image(self, image: Image, rect: Rect, color: Color | None = None) -> None: ...
+    def image(self, image: Image, color: Color | None = None) -> Rect: ...
     def reset_command_iterator(self) -> None: ...
     def get_current_container(self) -> ContainerWrapper | None: ...
-    def get_container(self, name: str) -> ContainerWrapper | None: ...
+    def get_container(self, name: str) -> ContainerWrapper: ...
     def mouse_over(self, rect: Rect) -> int: ...
     def bring_to_front(self, container: ContainerWrapper) -> None: ...
     def treenode(self, label: str, opt: int = 0) -> AbstractContextManager[bool]: ...
@@ -169,6 +175,7 @@ class Context:
         | RectCommand
         | TextCommand
         | IconCommand
+        | ImageCommand
         | ClipCommand
         | JumpCommand
         | None
@@ -220,6 +227,12 @@ class IconCommand:
     icon_id: int
     color: Color
 
+class ImageCommand:
+    type: int
+    rect: Rect
+    image_id: int
+    color: Color
+
 class ClipCommand:
     type: int
     rect: Rect
@@ -232,6 +245,17 @@ class Textbox:
     def __init__(self, buffer_size: int = 128) -> None: ...
     def update(self, ctx: Context, opt: int = 0) -> tuple[int, str]: ...
 
+class Image:
+    @property
+    def width(self) -> int: ...
+    @property
+    def height(self) -> int: ...
+    @property
+    def closed(self) -> bool: ...
+    def __init__(self, width: int, height: int, pixels: Any = None) -> None: ...
+    def update(self, pixels: Any) -> None: ...
+    def close(self) -> None: ...
+
 # Constants
 class Clip:
     PART: int
@@ -243,6 +267,7 @@ class Command:
     RECT: int
     TEXT: int
     ICON: int
+    IMAGE: int
     MAX: int
 
 class ColorIndex:
@@ -308,6 +333,7 @@ class Key:
     DOWN: int
     HOME: int
     END: int
+    TAB: int
 
 class EventType:
     QUIT: int
@@ -319,6 +345,28 @@ class EventType:
     KEYUP: int
     TEXT: int
     RESIZE: int
+    DROPFILE: int
+    FOCUS_GAINED: int
+    FOCUS_LOST: int
+
+class Mod:
+    SHIFT: int
+    CTRL: int
+    ALT: int
+    GUI: int
+
+class Cursor:
+    ARROW: int
+    IBEAM: int
+    WAIT: int
+    CROSSHAIR: int
+    SIZENWSE: int
+    SIZENESW: int
+    SIZEWE: int
+    SIZENS: int
+    SIZEALL: int
+    NO: int
+    HAND: int
 
 class Event:
     @property
@@ -335,6 +383,10 @@ class Event:
     def keycode(self) -> int: ...
     @property
     def text(self) -> str: ...
+    @property
+    def clicks(self) -> int: ...
+    @property
+    def mod(self) -> int: ...
     def __init__(
         self,
         type: int,
@@ -344,9 +396,19 @@ class Event:
         key: int = 0,
         keycode: int = 0,
         text: str = "",
+        clicks: int = 0,
+        mod: int = 0,
     ) -> None: ...
 
 def poll_event() -> Event | None: ...
+def wait_event(timeout: float | None = None) -> Event | None: ...
+def get_clipboard_text() -> str: ...
+def set_clipboard_text(text: str) -> None: ...
+def set_cursor(cursor: int) -> None: ...
+def renderer_get_scale() -> float: ...
+def _translate_sdl_event(
+    kind: str, a: int = 0, b: int = 0, c: int = 0, text: bytes = b"", d: int = 0
+) -> Event | None: ...
 
 # Renderer functions
 def render(ctx: Context, bg: Color | None = None) -> None: ...

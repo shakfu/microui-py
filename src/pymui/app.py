@@ -16,6 +16,7 @@ UI frame per iteration, and renders with the bundled OpenGL renderer.
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Callable
 
@@ -24,15 +25,20 @@ from .pymui import (
     Context,
     Event,
     EventType,
+    Mod,
     poll_event,
     render,
     renderer_init_window,
     renderer_resize,
     renderer_shutdown,
+    wait_event,
 )
 
 # Pixels scrolled per wheel notch; matches the microui C demo.
 SCROLL_STEP = 30
+
+# Modifier for clipboard shortcuts: Cmd on macOS, Ctrl elsewhere.
+COMMAND_MOD = Mod.GUI if sys.platform == "darwin" else Mod.CTRL
 
 
 class App:
@@ -48,6 +54,11 @@ class App:
         max_fps: Frame-rate cap, or None for none. The renderer requests
             vsync, but drivers and compositors may ignore it; without a cap
             the loop would then redraw as fast as the CPU allows.
+        idle_timeout: If set, wait up to this many seconds for input
+            before each frame, instead of redrawing continuously. One extra
+            frame follows each input, because some microui state (hover,
+            popups) settles a frame late. Call `redraw()` after changing
+            state from outside the UI.
     """
 
     def __init__(
@@ -59,6 +70,7 @@ class App:
         bg: Color | None = None,
         resizable: bool = True,
         max_fps: float | None = 120,
+        idle_timeout: float | None = None,
     ) -> None:
         self.title = title
         self.width = width
@@ -68,7 +80,10 @@ class App:
         self.ctx = Context()
         self.running = False
         self.max_fps = max_fps
+        self.idle_timeout = idle_timeout
+        self.focused = True
         self._next_frame = 0.0
+        self._redraw = True
 
     @property
     def max_fps(self) -> float | None:
@@ -88,6 +103,13 @@ class App:
         """Stop the loop after the current frame."""
         self.running = False
 
+    def redraw(self) -> None:
+        """Build the next frame without waiting for input (see `idle_timeout`)."""
+        self._redraw = True
+
+    def drop_file(self, path: str) -> None:
+        """Called when a file is dropped on the window. Override to handle it."""
+
     def handle_event(self, event: Event) -> None:
         """Forward one event to the context."""
         ctx = self.ctx
@@ -97,13 +119,15 @@ class App:
         elif t == EventType.MOUSEMOTION:
             ctx.input_mousemove(event.x, event.y)
         elif t == EventType.MOUSEWHEEL:
-            ctx.input_scroll(0, event.y * -SCROLL_STEP)
+            ctx.input_scroll(event.x * SCROLL_STEP, event.y * -SCROLL_STEP)
         elif t == EventType.TEXT:
             ctx.input_text(event.text)
         elif t == EventType.MOUSEDOWN and event.button:
             ctx.input_mousedown(event.x, event.y, event.button)
         elif t == EventType.MOUSEUP and event.button:
             ctx.input_mouseup(event.x, event.y, event.button)
+        elif t == EventType.KEYDOWN and event.mod & COMMAND_MOD and event.keycode in _CLIPBOARD:
+            _CLIPBOARD[event.keycode](ctx)
         elif t == EventType.KEYDOWN and event.key:
             ctx.input_keydown(event.key)
         elif t == EventType.KEYUP and event.key:
@@ -111,11 +135,28 @@ class App:
         elif t == EventType.RESIZE:
             self.width, self.height = event.x, event.y
             renderer_resize(self.width, self.height)
+        elif t == EventType.DROPFILE:
+            self.drop_file(event.text)
+        elif t == EventType.FOCUS_GAINED:
+            self.focused = True
+        elif t == EventType.FOCUS_LOST:
+            self.focused = False
 
     def step(self, frame: Callable[[Context], None]) -> None:
-        """Drain pending events, build one frame, and render it."""
+        """Handle pending events, build one frame, and render it.
+
+        With `idle_timeout` set, first wait for an event unless a redraw is due.
+        """
+        had_input = False
+        if self.idle_timeout is not None and not self._redraw:
+            event = wait_event(self.idle_timeout)
+            if event is not None:
+                self.handle_event(event)
+                had_input = True
         while (event := poll_event()) is not None:
             self.handle_event(event)
+            had_input = True
+        self._redraw = had_input
         with self.ctx:
             frame(self.ctx)
         render(self.ctx, self.bg)
@@ -149,3 +190,11 @@ class App:
         finally:
             self.running = False
             renderer_shutdown()
+
+
+_CLIPBOARD = {
+    ord("c"): Context.input_copy,
+    ord("x"): Context.input_cut,
+    ord("v"): Context.input_paste,
+    ord("a"): Context.input_select_all,
+}

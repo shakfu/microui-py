@@ -602,6 +602,26 @@ void mu_draw_icon(mu_Context* ctx, int id, mu_Rect rect, mu_Color color)
 }
 
 
+void mu_draw_image(mu_Context* ctx, int id, mu_Rect rect, mu_Color color)
+{
+    mu_Command* cmd;
+    int clipped = mu_check_clip(ctx, rect);
+    if (clipped == MU_CLIP_ALL) {
+        return;
+    }
+    if (clipped == MU_CLIP_PART) {
+        mu_set_clip(ctx, mu_get_clip_rect(ctx));
+    }
+    cmd              = mu_push_command(ctx, MU_COMMAND_IMAGE, sizeof(mu_ImageCommand));
+    cmd->image.id    = id;
+    cmd->image.rect  = rect;
+    cmd->image.color = color;
+    if (clipped) {
+        mu_set_clip(ctx, unclipped_rect);
+    }
+}
+
+
 /*============================================================================
 ** layout
 **============================================================================*/
@@ -897,38 +917,173 @@ int mu_checkbox(mu_Context* ctx, const char* label, int* state)
 }
 
 
+/* pymui: utf-8 aware caret movement */
+static int utf8_prev(const char* s, int i)
+{
+    while (i > 0 && (s[--i] & 0xc0) == 0x80)
+        ;
+    return i;
+}
+
+
+static int utf8_next(const char* s, int i, int len)
+{
+    if (i < len) {
+        i++;
+    }
+    while (i < len && (s[i] & 0xc0) == 0x80) {
+        i++;
+    }
+    return i;
+}
+
+
+/* x offset of the text so the caret stays inside `r` */
+static int caret_textx(mu_Context* ctx, const char* buf, int caret, mu_Rect r)
+{
+    int caretx = ctx->text_width(ctx->style->font, buf, caret);
+    return r.x + mu_min(r.w - ctx->style->padding - caretx - 1, ctx->style->padding);
+}
+
+
+/* byte offset of the character boundary nearest to screen x `mx` */
+static int caret_at(mu_Context* ctx, const char* buf, int len, int textx, int mx)
+{
+    int x = textx, i = 0;
+    while (i < len) {
+        int next = utf8_next(buf, i, len);
+        int w    = ctx->text_width(ctx->style->font, buf + i, next - i);
+        if (mx < x + w / 2) {
+            break;
+        }
+        x += w;
+        i = next;
+    }
+    return i;
+}
+
+
+/* delete bytes [a, b) of `buf`, which holds `len` bytes; return the new length */
+static int text_delete(char* buf, int len, int a, int b)
+{
+    memmove(buf + a, buf + b, len - b + 1);
+    return len - (b - a);
+}
+
+
 int mu_textbox_raw(mu_Context* ctx, char* buf, int bufsz, mu_Id id, mu_Rect r, int opt)
 {
     int res = 0;
     mu_update_control(ctx, id, r, opt | MU_OPT_HOLDFOCUS);
 
     if (ctx->focus == id) {
-        /* handle text input */
         int len   = strlen(buf);
         int avail = strlen(ctx->input_text);
-        int n     = mu_min(bufsz - len - 1, avail);
-        /* pymui: do not split a utf-8 sequence when the buffer fills */
+        int shift = ctx->key_down & MU_KEY_SHIFT;
+        int n, caret, anchor, lo, hi;
+        /* pymui: a newly focused textbox starts with the caret at the end */
+        if (ctx->caret_id != id) {
+            ctx->caret_id = id;
+            ctx->caret = ctx->anchor = len;
+        }
+        caret  = mu_clamp(ctx->caret, 0, len);
+        anchor = mu_clamp(ctx->anchor, 0, len);
+        while (caret > 0 && caret < len && (buf[caret] & 0xc0) == 0x80)
+            caret--;
+        while (anchor > 0 && anchor < len && (buf[anchor] & 0xc0) == 0x80)
+            anchor--;
+
+        /* clipboard requests, against the text as passed in */
+        if (ctx->text_op & MU_TEXTOP_SELECTALL) {
+            anchor = 0;
+            caret  = len;
+        }
+        if (ctx->text_op & (MU_TEXTOP_COPY | MU_TEXTOP_CUT)) {
+            ctx->clip_start = mu_min(caret, anchor);
+            ctx->clip_end   = mu_max(caret, anchor);
+            if (ctx->text_op & MU_TEXTOP_CUT && ctx->clip_end > ctx->clip_start) {
+                len    = text_delete(buf, len, ctx->clip_start, ctx->clip_end);
+                caret  = anchor = ctx->clip_start;
+                res   |= MU_RES_CHANGE;
+            }
+        }
+        ctx->text_op = 0;
+
+        /* mouse: click places the caret, shift+click or drag extends; the
+        ** drag continues outside the box, where microui drops hover */
+        if (ctx->mouse_pressed & MU_MOUSE_LEFT) {
+            ctx->selecting = ctx->hover == id;
+        }
+        if (!(ctx->mouse_down & MU_MOUSE_LEFT)) {
+            ctx->selecting = 0;
+        }
+        if (ctx->selecting) {
+            caret = caret_at(ctx, buf, len, caret_textx(ctx, buf, caret, r), ctx->mouse_pos.x);
+            if (ctx->mouse_pressed & MU_MOUSE_LEFT && !shift) {
+                anchor = caret;
+            }
+        }
+
+        /* typing, backspace and delete replace the selection */
+        lo = mu_min(caret, anchor);
+        hi = mu_max(caret, anchor);
+        if (avail > 0 || (ctx->key_pressed & (MU_KEY_BACKSPACE | MU_KEY_DELETE))) {
+            if (hi > lo) {
+                len   = text_delete(buf, len, lo, hi);
+                caret = anchor = lo;
+                res  |= MU_RES_CHANGE;
+            } else if (ctx->key_pressed & MU_KEY_BACKSPACE && caret > 0) {
+                int p = utf8_prev(buf, caret);
+                len   = text_delete(buf, len, p, caret);
+                caret = anchor = p;
+                res  |= MU_RES_CHANGE;
+            } else if (ctx->key_pressed & MU_KEY_DELETE && caret < len) {
+                len  = text_delete(buf, len, caret, utf8_next(buf, caret, len));
+                res |= MU_RES_CHANGE;
+            }
+        }
+        /* do not split a utf-8 sequence when the buffer fills */
+        n = mu_min(bufsz - len - 1, avail);
         while (n > 0 && n < avail && (ctx->input_text[n] & 0xc0) == 0x80)
             n--;
         if (n > 0) {
-            memcpy(buf + len, ctx->input_text, n);
+            memmove(buf + caret + n, buf + caret, len - caret + 1);
+            memcpy(buf + caret, ctx->input_text, n);
             len += n;
-            buf[len] = '\0';
+            caret += n;
+            anchor = caret;
             res |= MU_RES_CHANGE;
         }
-        /* handle backspace */
-        if (ctx->key_pressed & MU_KEY_BACKSPACE && len > 0) {
-            /* skip utf-8 continuation bytes */
-            while ((buf[--len] & 0xc0) == 0x80 && len > 0)
-                ;
-            buf[len] = '\0';
-            res |= MU_RES_CHANGE;
+
+        /* caret movement; without shift, collapse the selection */
+        if (ctx->key_pressed & (MU_KEY_LEFT | MU_KEY_RIGHT | MU_KEY_HOME | MU_KEY_END)) {
+            lo = mu_min(caret, anchor);
+            hi = mu_max(caret, anchor);
+            if (ctx->key_pressed & MU_KEY_LEFT) {
+                caret = (!shift && hi > lo) ? lo : utf8_prev(buf, caret);
+            }
+            if (ctx->key_pressed & MU_KEY_RIGHT) {
+                caret = (!shift && hi > lo) ? hi : utf8_next(buf, caret, len);
+            }
+            if (ctx->key_pressed & MU_KEY_HOME) {
+                caret = 0;
+            }
+            if (ctx->key_pressed & MU_KEY_END) {
+                caret = len;
+            }
+            if (!shift) {
+                anchor = caret;
+            }
         }
+        ctx->caret  = caret;
+        ctx->anchor = anchor;
         /* handle return */
         if (ctx->key_pressed & MU_KEY_RETURN) {
             mu_set_focus(ctx, 0);
             res |= MU_RES_SUBMIT;
         }
+    } else if (ctx->caret_id == id) {
+        ctx->caret_id = 0;
     }
 
     /* draw */
@@ -936,14 +1091,20 @@ int mu_textbox_raw(mu_Context* ctx, char* buf, int bufsz, mu_Id id, mu_Rect r, i
     if (ctx->focus == id) {
         mu_Color color = ctx->style->colors[MU_COLOR_TEXT];
         mu_Font font   = ctx->style->font;
-        int textw      = ctx->text_width(font, buf, -1);
+        int caret      = ctx->caret;
         int texth      = ctx->text_height(font);
-        int ofx        = r.w - ctx->style->padding - textw - 1;
-        int textx      = r.x + mu_min(ofx, ctx->style->padding);
+        int textx      = caret_textx(ctx, buf, caret, r);
         int texty      = r.y + (r.h - texth) / 2;
+        int caretx     = ctx->text_width(font, buf, caret);
         mu_push_clip_rect(ctx, r);
+        if (ctx->anchor != caret) {
+            int ax = ctx->text_width(font, buf, ctx->anchor);
+            int x0 = mu_min(ax, caretx), x1 = mu_max(ax, caretx);
+            mu_draw_rect(ctx, mu_rect(textx + x0, texty, x1 - x0, texth),
+                         ctx->style->colors[MU_COLOR_BUTTONFOCUS]);
+        }
         mu_draw_text(ctx, font, buf, -1, mu_vec2(textx, texty), color);
-        mu_draw_rect(ctx, mu_rect(textx + textw, texty, 1, texth), color);
+        mu_draw_rect(ctx, mu_rect(textx + caretx, texty, 1, texth), color);
         mu_pop_clip_rect(ctx);
     } else {
         mu_draw_control_text(ctx, buf, r, MU_COLOR_TEXT, opt);

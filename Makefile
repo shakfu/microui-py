@@ -40,6 +40,9 @@ showcase:
 test:
 	@uv run pytest
 
+test-window:
+	@PYMUI_WINDOW_TESTS=1 uv run pytest
+
 memory-test:
 	@echo "Running memory leak detection..."
 	@uv run python scripts/memory_leak_test.py --verbose

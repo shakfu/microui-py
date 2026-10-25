@@ -44,6 +44,7 @@ enum {
     MU_COMMAND_RECT,
     MU_COMMAND_TEXT,
     MU_COMMAND_ICON,
+    MU_COMMAND_IMAGE, /* pymui */
     MU_COMMAND_MAX
 };
 
@@ -95,6 +96,13 @@ enum {
     MU_OPT_EXPANDED    = (1 << 12)
 };
 
+/* pymui: requests for the focused textbox */
+enum {
+    MU_TEXTOP_COPY      = (1 << 0),
+    MU_TEXTOP_CUT       = (1 << 1),
+    MU_TEXTOP_SELECTALL = (1 << 2)
+};
+
 enum {
     MU_MOUSE_LEFT   = (1 << 0),
     MU_MOUSE_RIGHT  = (1 << 1),
@@ -114,7 +122,8 @@ enum {
     MU_KEY_UP        = (1 << 9),
     MU_KEY_DOWN      = (1 << 10),
     MU_KEY_HOME      = (1 << 11),
-    MU_KEY_END       = (1 << 12)
+    MU_KEY_END       = (1 << 12),
+    MU_KEY_TAB       = (1 << 13)
 };
 
 
@@ -185,6 +194,15 @@ typedef struct {
 } mu_IconCommand;
 
 
+/* pymui: draw renderer image `id` scaled into `rect`, tinted by `color` */
+typedef struct {
+    mu_BaseCommand base;
+    mu_Rect rect;
+    int id;
+    mu_Color color;
+} mu_ImageCommand;
+
+
 typedef union {
     int type;
     mu_BaseCommand base;
@@ -193,6 +211,7 @@ typedef union {
     mu_RectCommand rect;
     mu_TextCommand text;
     mu_IconCommand icon;
+    mu_ImageCommand image;
 } mu_Command;
 
 
@@ -255,6 +274,15 @@ struct mu_Context {
     mu_Container* scroll_target;
     char number_edit_buf[MU_MAX_FMT];
     mu_Id number_edit;
+    /* pymui: caret and selection anchor of the focused textbox, byte
+    ** offsets; text_op holds MU_TEXTOP_* requests for it, and copy/cut
+    ** report the selected byte range of the text as it was on entry */
+    mu_Id caret_id;
+    int caret;
+    int anchor;
+    int text_op;
+    int clip_start, clip_end;
+    int selecting; /* a left-button drag started in the textbox */
     /* stacks */
     mu_stack(char, MU_COMMANDLIST_SIZE) command_list;
     mu_stack(mu_Container*, MU_ROOTLIST_SIZE) root_list;
@@ -317,6 +345,7 @@ void mu_draw_rect(mu_Context* ctx, mu_Rect rect, mu_Color color);
 void mu_draw_box(mu_Context* ctx, mu_Rect rect, mu_Color color);
 void mu_draw_text(mu_Context* ctx, mu_Font font, const char* str, int len, mu_Vec2 pos, mu_Color color);
 void mu_draw_icon(mu_Context* ctx, int id, mu_Rect rect, mu_Color color);
+void mu_draw_image(mu_Context* ctx, int id, mu_Rect rect, mu_Color color);
 
 void mu_layout_row(mu_Context* ctx, int items, const int* widths, int height);
 void mu_layout_width(mu_Context* ctx, int width);

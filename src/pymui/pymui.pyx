@@ -5,12 +5,15 @@ import operator
 import os
 import re
 import sys
+import time
 from contextlib import contextmanager
 
 cimport pymui
 
 
 cdef bint _window_open = False
+cdef str _clipboard = ""  # used while SDL video is not initialized
+cdef SDL_Cursor* _cursors[16]  # system cursors, created on first use
 
 # Command-buffer bytes kept free before each drawing call, beyond the call's
 # own text. One window with title, frame and scrollbars uses under 1 KB.
@@ -543,6 +546,8 @@ cdef class Context:
     cdef set _frame_ids      # widget/container IDs claimed this frame
     cdef dict _auto_ids      # (scope id, code, offset) -> next occurrence
     cdef bytes _pending_text # input text beyond microui's 32-byte buffer
+    cdef list _focus_order   # textbox IDs in this frame's order, for Tab
+    cdef list _frame_images  # Images drawn this frame, kept alive until render
 
     def __cinit__(self, *args, **kwargs):
         # Allocated here, not in __init__, so no instance has a NULL ptr.
@@ -560,6 +565,8 @@ cdef class Context:
         self._frame_ids = set()
         self._auto_ids = {}
         self._pending_text = b""
+        self._focus_order = []
+        self._frame_images = []
 
     def __dealloc__(self):
         if self.ptr is not NULL:
@@ -687,6 +694,14 @@ cdef class Context:
         self.ptr.input_text[used + cut] = 0
         self._pending_text = self._pending_text[cut:]
 
+    cdef int _finish_copy(self, int op, bytes before) except -1:
+        """If the textbox just called served copy/cut request `op`, put the
+        selected bytes of its input text `before` on the clipboard."""
+        cdef mu_Context* c = self.ptr
+        if op and c.text_op == 0 and c.clip_end > c.clip_start:
+            set_clipboard_text(before[c.clip_start:c.clip_end].decode('utf-8', 'replace'))
+        return 0
+
     # ------------------------------------------------------------------
     # Frame lifecycle
 
@@ -703,6 +718,8 @@ cdef class Context:
         self.current_command = NULL
         self._auto_ids.clear()
         self._frame_ids.clear()
+        self._focus_order = []
+        self._frame_images = []
         self._flush_text()
 
     def end(self):
@@ -719,8 +736,19 @@ cdef class Context:
             names = ", ".join(self._scopes) or "microui stacks"
             self.abort_frame()
             raise RuntimeError(f"end() with unclosed scopes: {names}")
+        cdef bint tab = c.key_pressed & MU_KEY_TAB
+        cdef bint back = c.key_down & MU_KEY_SHIFT
+        cdef mu_Id focus = c.focus
         mu_end(self.ptr)
         self._in_frame = False
+        self.ptr.text_op = 0
+        order = self._focus_order
+        if tab and order:
+            if focus in order:
+                i = (order.index(focus) + (-1 if back else 1)) % len(order)
+            else:
+                i = len(order) - 1 if back else 0
+            mu_set_focus(c, order[i])
 
     def abort_frame(self):
         """Discard the current frame instead of calling end().
@@ -744,6 +772,7 @@ cdef class Context:
         self.current_command = NULL
         self._scopes.clear()
         self._in_frame = False
+        self.ptr.text_op = 0
 
     def __enter__(self):
         """`with ctx:` calls begin()."""
@@ -840,6 +869,22 @@ cdef class Context:
             raise ValueError("too much pending text input")
         self._pending_text += btext
         self._flush_text()
+
+    def input_copy(self):
+        """Copy the focused textbox's selection to the clipboard during the next frame."""
+        self.ptr.text_op |= MU_TEXTOP_COPY
+
+    def input_cut(self):
+        """As input_copy(), then delete the selection."""
+        self.ptr.text_op |= MU_TEXTOP_CUT
+
+    def input_select_all(self):
+        """Select all text of the focused textbox during the next frame."""
+        self.ptr.text_op |= MU_TEXTOP_SELECTALL
+
+    def input_paste(self):
+        """Type the clipboard text into the focused textbox."""
+        self.input_text(get_clipboard_text())
 
     # ------------------------------------------------------------------
     # Layout
@@ -987,6 +1032,7 @@ cdef class Context:
         cdef bytes bkey = self._widget_key(key)
         cdef int copy_len = _utf8_cut(b_buf, bufsz - 1)
         cdef int result
+        cdef int op = self.ptr.text_op & (MU_TEXTOP_COPY | MU_TEXTOP_CUT)
         cdef mu_Id wid
         cdef char* c_buf
         self._require_layout()
@@ -1001,9 +1047,12 @@ cdef class Context:
                 memcpy(c_buf, <const char*>b_buf, copy_len)
             c_buf[copy_len] = 0
             result = mu_textbox_raw(self.ptr, c_buf, bufsz, wid, mu_layout_next(self.ptr), opt)
-            return (result, c_buf.decode('utf-8', errors='replace'))
+            text = c_buf.decode('utf-8', errors='replace')
         finally:
             free(c_buf)
+        self._focus_order.append(wid)
+        self._finish_copy(op, b_buf[:copy_len] if op else None)
+        return (result, text)
 
     def slider(self, float value, float low, float high, float step=0,
                str fmt="%.2f", int opt=0, key=None) -> tuple:
@@ -1226,6 +1275,22 @@ cdef class Context:
         self._reserve()
         mu_draw_icon(self.ptr, id, rect.to_c(), color.to_c())
 
+    def draw_image(self, Image image, Rect rect, Color color=None):
+        """Draw `image` scaled into `rect`, multiplied by `color` (default white)."""
+        image._require_valid()
+        self._require_clip()
+        self._reserve()
+        mu_draw_image(self.ptr, image._id, rect.to_c(),
+                      mu_color(255, 255, 255, 255) if color is None else color.to_c())
+        self._frame_images.append(image)
+
+    def image(self, Image image, Color color=None) -> Rect:
+        """Draw `image` filling the next layout cell; return the cell."""
+        self._require_layout()
+        cdef Rect r = Rect.from_c(mu_layout_next(self.ptr))
+        self.draw_image(image, r, color)
+        return r
+
     # Custom widget primitives
     def mouse_over(self, Rect rect) -> int:
         """Nonzero if the mouse is over `rect` within the current clip and window."""
@@ -1277,6 +1342,8 @@ cdef class Context:
             return TextCommand.from_ptr(&self.current_command.text)
         elif self.current_command.type == MU_COMMAND_ICON:
             return IconCommand.from_c(self.current_command.icon)
+        elif self.current_command.type == MU_COMMAND_IMAGE:
+            return ImageCommand.from_c(self.current_command.image)
         elif self.current_command.type == MU_COMMAND_CLIP:
             return ClipCommand.from_c(self.current_command.clip)
         elif self.current_command.type == MU_COMMAND_JUMP:
@@ -1602,6 +1669,32 @@ cdef class IconCommand:
         return Color.from_c(self._cmd.color)
 
 
+cdef class ImageCommand:
+    cdef mu_ImageCommand _cmd
+
+    @staticmethod
+    cdef ImageCommand from_c(mu_ImageCommand cmd):
+        cdef ImageCommand result = ImageCommand.__new__(ImageCommand)
+        result._cmd = cmd
+        return result
+
+    @property
+    def type(self) -> int:
+        return self._cmd.base.type
+
+    @property
+    def rect(self) -> Rect:
+        return Rect.from_c(self._cmd.rect)
+
+    @property
+    def image_id(self) -> int:
+        return self._cmd.id
+
+    @property
+    def color(self) -> Color:
+        return Color.from_c(self._cmd.color)
+
+
 cdef class ClipCommand:
     cdef mu_ClipCommand _cmd
 
@@ -1645,6 +1738,7 @@ class Command:
     RECT = MU_COMMAND_RECT
     TEXT = MU_COMMAND_TEXT
     ICON = MU_COMMAND_ICON
+    IMAGE = MU_COMMAND_IMAGE
     MAX = MU_COMMAND_MAX
 
 class ColorIndex:
@@ -1710,6 +1804,7 @@ class Key:
     DOWN = MU_KEY_DOWN
     HOME = MU_KEY_HOME
     END = MU_KEY_END
+    TAB = MU_KEY_TAB
 
 
 # Textbox class for persistent state
@@ -1787,9 +1882,14 @@ cdef class Textbox:
         ctx._require_layout()
         ctx._reserve(0, 1, 0, 0, 0, self.buffer_size)
         # Same ID mu_textbox_ex derives: the buffer address, unique per Textbox.
-        ctx._claim(mu_get_id(ctx.ptr, &self.buffer, sizeof(self.buffer)), "Textbox")
+        cdef mu_Id wid = mu_get_id(ctx.ptr, &self.buffer, sizeof(self.buffer))
+        ctx._claim(wid, "Textbox")
+        cdef int op = ctx.ptr.text_op & (MU_TEXTOP_COPY | MU_TEXTOP_CUT)
+        cdef bytes before = self.buffer[:strlen(self.buffer)] if op else None
         cdef int result = mu_textbox_ex(ctx.ptr, self.buffer, self.buffer_size, opt)
         self.current_text = self.buffer.decode('utf-8', errors='replace')
+        ctx._focus_order.append(wid)
+        ctx._finish_copy(op, before)
 
         return (result, self.current_text)
 
@@ -1831,6 +1931,142 @@ cdef class Textbox:
             self.current_text = value
 
 
+cdef class Image:
+    """An RGBA texture for `Context.draw_image()` and `Context.image()`.
+
+    Needs an open renderer window. Closing the window invalidates every
+    Image; drawing or updating one afterwards raises.
+
+    Args:
+        width, height: Size in pixels.
+        pixels: `width * height * 4` bytes of RGBA, top row first.
+            Defaults to transparent black. From Pillow:
+            `img.convert("RGBA").tobytes()`.
+
+    Raises:
+        RuntimeError: Without a window, or if the GPU rejects the texture.
+        ValueError: If the size or pixel data length is wrong.
+    """
+    cdef unsigned _id
+    cdef int _gen
+    cdef readonly int width, height
+
+    def __cinit__(self, int width, int height, pixels=None):
+        self._id = 0
+        if width <= 0 or height <= 0:
+            raise ValueError("image dimensions must be positive")
+        _require_window()
+        cdef bytes data = self._check(width, height, pixels)
+        self.width = width
+        self.height = height
+        self._id = r_image_create(<const unsigned char*>data, width, height)
+        if self._id == 0:
+            raise RuntimeError(f"cannot create a {width}x{height} texture")
+        self._gen = r_generation()
+
+    cdef bytes _check(self, int width, int height, pixels):
+        cdef Py_ssize_t n = <Py_ssize_t>width * height * 4
+        if pixels is None:
+            return bytes(n)
+        data = bytes(pixels)
+        if len(data) != n:
+            raise ValueError(f"expected {n} bytes of RGBA, got {len(data)}")
+        return data
+
+    cdef bint _valid(self):
+        return self._id != 0 and self._gen == r_generation()
+
+    cdef int _require_valid(self) except -1:
+        if not self._valid():
+            raise RuntimeError("image is closed, or its window was closed")
+        return 0
+
+    def update(self, pixels):
+        """Replace the pixels; the size stays the same."""
+        self._require_valid()
+        cdef bytes data = self._check(self.width, self.height, pixels)
+        if r_image_update(self._id, <const unsigned char*>data, self.width, self.height) != 0:
+            raise RuntimeError("texture update failed")
+
+    def close(self):
+        """Free the texture now instead of at garbage collection."""
+        if self._valid():
+            r_image_destroy(self._id)
+        self._id = 0
+
+    @property
+    def closed(self) -> bool:
+        return not self._valid()
+
+    def __dealloc__(self):
+        if self._valid():
+            r_image_destroy(self._id)
+
+    def __repr__(self):
+        return f"Image({self.width}x{self.height}{', closed' if self.closed else ''})"
+
+
+def get_clipboard_text() -> str:
+    """System clipboard text, or a process-local one while no window is open."""
+    cdef char* s
+    if not SDL_WasInit(SDL_INIT_VIDEO):
+        return _clipboard
+    s = SDL_GetClipboardText()
+    if s == NULL:
+        return ""
+    try:
+        return s[:strlen(s)].decode('utf-8', 'replace')
+    finally:
+        SDL_free(s)
+
+
+def set_clipboard_text(str text):
+    """Set the system clipboard, or a process-local one while no window is open."""
+    global _clipboard
+    cdef bytes b = text.encode('utf-8').split(b"\0", 1)[0]
+    if not SDL_WasInit(SDL_INIT_VIDEO):
+        _clipboard = b.decode('utf-8')
+        return
+    if SDL_SetClipboardText(b) != 0:
+        raise RuntimeError(f"SDL_SetClipboardText failed: {SDL_GetError().decode('utf-8', 'replace')}")
+
+
+class Cursor:
+    ARROW = SDL_SYSTEM_CURSOR_ARROW
+    IBEAM = SDL_SYSTEM_CURSOR_IBEAM
+    WAIT = SDL_SYSTEM_CURSOR_WAIT
+    CROSSHAIR = SDL_SYSTEM_CURSOR_CROSSHAIR
+    SIZENWSE = SDL_SYSTEM_CURSOR_SIZENWSE
+    SIZENESW = SDL_SYSTEM_CURSOR_SIZENESW
+    SIZEWE = SDL_SYSTEM_CURSOR_SIZEWE
+    SIZENS = SDL_SYSTEM_CURSOR_SIZENS
+    SIZEALL = SDL_SYSTEM_CURSOR_SIZEALL
+    NO = SDL_SYSTEM_CURSOR_NO
+    HAND = SDL_SYSTEM_CURSOR_HAND
+
+
+def set_cursor(int cursor):
+    """Set the mouse cursor to a `Cursor` shape.
+
+    Raises:
+        ValueError: If `cursor` is not a `Cursor` value.
+        RuntimeError: Without a window.
+    """
+    if not 0 <= cursor < SDL_NUM_SYSTEM_CURSORS:
+        raise ValueError(f"unknown cursor {cursor}")
+    _require_window()
+    if _cursors[cursor] == NULL:
+        _cursors[cursor] = SDL_CreateSystemCursor(cursor)
+        if _cursors[cursor] == NULL:
+            raise RuntimeError(f"cursor {cursor} unavailable: {SDL_GetError().decode('utf-8', 'replace')}")
+    SDL_SetCursor(_cursors[cursor])
+
+
+def renderer_get_scale() -> float:
+    """Device pixels per logical pixel: 2.0 on most HiDPI displays, 1.0 without a window."""
+    return r_get_scale()
+
+
 # Renderer functions exposed as module-level functions
 def renderer_init():
     """Initialize the renderer with an 800x600 untitled window."""
@@ -1866,7 +2102,8 @@ def renderer_shutdown():
     global _window_open
     r_shutdown()
     if _window_open:
-        SDL_Quit()
+        SDL_Quit()  # also frees the cursors
+    memset(_cursors, 0, sizeof(_cursors))
     _window_open = False
 
 
@@ -1880,6 +2117,9 @@ cdef enum:
     _EV_KEYUP
     _EV_TEXT
     _EV_RESIZE
+    _EV_DROPFILE
+    _EV_FOCUS_GAINED
+    _EV_FOCUS_LOST
 
 class EventType:
     QUIT = _EV_QUIT
@@ -1891,21 +2131,35 @@ class EventType:
     KEYUP = _EV_KEYUP
     TEXT = _EV_TEXT
     RESIZE = _EV_RESIZE
+    DROPFILE = _EV_DROPFILE
+    FOCUS_GAINED = _EV_FOCUS_GAINED
+    FOCUS_LOST = _EV_FOCUS_LOST
+
+
+class Mod:
+    """Modifier bits of `Event.mod`. GUI is Cmd on macOS, the Windows key elsewhere."""
+    SHIFT = KMOD_SHIFT
+    CTRL = KMOD_CTRL
+    ALT = KMOD_ALT
+    GUI = KMOD_GUI
 
 
 cdef class Event:
     """A window event, translated from SDL by `poll_event()`.
 
     `x, y` is the pointer position for mouse button and motion events, the
-    scroll amount for MOUSEWHEEL, and the new window size for RESIZE.
+    scroll amount for MOUSEWHEEL (positive: right and away from the user),
+    and the new window size for RESIZE.
     `button` is a `Mouse` value and `key` a `Key` value, 0 if unmapped.
     `keycode` is the SDL keycode, which equals the ASCII code for printable keys.
+    `mod` holds the `Mod` bits of a key event; `clicks` is 2 for a double click.
+    `text` is the typed text for TEXT and the file path for DROPFILE.
     """
-    cdef readonly int type, x, y, button, key, keycode
+    cdef readonly int type, x, y, button, key, keycode, clicks, mod
     cdef readonly str text
 
     def __init__(self, int type, int x=0, int y=0, int button=0, int key=0,
-                 int keycode=0, str text=""):
+                 int keycode=0, str text="", int clicks=0, int mod=0):
         self.type = type
         self.x = x
         self.y = y
@@ -1913,10 +2167,13 @@ cdef class Event:
         self.key = key
         self.keycode = keycode
         self.text = text
+        self.clicks = clicks
+        self.mod = mod
 
     def __repr__(self):
         return (f"Event(type={self.type}, x={self.x}, y={self.y}, button={self.button}, "
-                f"key={self.key}, keycode={self.keycode}, text={self.text!r})")
+                f"key={self.key}, keycode={self.keycode}, text={self.text!r}, "
+                f"clicks={self.clicks}, mod={self.mod})")
 
 
 cdef int _map_button(Uint8 b):
@@ -1940,6 +2197,7 @@ cdef int _map_key(SDL_Keycode k):
     if k == SDLK_DOWN: return MU_KEY_DOWN
     if k == SDLK_HOME: return MU_KEY_HOME
     if k == SDLK_END: return MU_KEY_END
+    if k == SDLK_TAB: return MU_KEY_TAB
     return 0
 
 
@@ -1952,18 +2210,38 @@ cdef Event _translate(SDL_Event* e):
         return Event(_EV_MOUSEMOTION, e.motion.x, e.motion.y)
     if t == SDL_MOUSEBUTTONDOWN or t == SDL_MOUSEBUTTONUP:
         return Event(_EV_MOUSEDOWN if t == SDL_MOUSEBUTTONDOWN else _EV_MOUSEUP,
-                     e.button.x, e.button.y, _map_button(e.button.button))
+                     e.button.x, e.button.y, _map_button(e.button.button),
+                     clicks=e.button.clicks)
     if t == SDL_MOUSEWHEEL:
-        return Event(_EV_MOUSEWHEEL, 0, e.wheel.y)
+        if e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED:
+            return Event(_EV_MOUSEWHEEL, -e.wheel.x, -e.wheel.y)
+        return Event(_EV_MOUSEWHEEL, e.wheel.x, e.wheel.y)
     if t == SDL_KEYDOWN or t == SDL_KEYUP:
         return Event(_EV_KEYDOWN if t == SDL_KEYDOWN else _EV_KEYUP,
-                     key=_map_key(e.key.keysym.sym), keycode=e.key.keysym.sym)
+                     key=_map_key(e.key.keysym.sym), keycode=e.key.keysym.sym,
+                     mod=e.key.keysym.mod)
     if t == SDL_TEXTINPUT:
         s = e.text.text
         return Event(_EV_TEXT, text=s[:strlen(s)].decode('utf-8', 'replace'))
-    if t == SDL_WINDOWEVENT and e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED:
-        return Event(_EV_RESIZE, e.window.data1, e.window.data2)
+    if t == SDL_DROPFILE and e.drop.file != NULL:
+        s = e.drop.file
+        return Event(_EV_DROPFILE, text=s[:strlen(s)].decode('utf-8', 'replace'))
+    if t == SDL_WINDOWEVENT:
+        if e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED:
+            return Event(_EV_RESIZE, e.window.data1, e.window.data2)
+        if e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED:
+            return Event(_EV_FOCUS_GAINED)
+        if e.window.event == SDL_WINDOWEVENT_FOCUS_LOST:
+            return Event(_EV_FOCUS_LOST)
     return None
+
+
+cdef Event _translate_owned(SDL_Event* e):
+    """_translate(), then free what SDL allocated for the event."""
+    cdef Event ev = _translate(e)
+    if e.type == SDL_DROPFILE and e.drop.file != NULL:
+        SDL_free(e.drop.file)
+    return ev
 
 
 def poll_event():
@@ -1974,15 +2252,41 @@ def poll_event():
     cdef SDL_Event e
     cdef Event ev
     while SDL_PollEvent(&e):
-        ev = _translate(&e)
+        ev = _translate_owned(&e)
         if ev is not None:
             return ev
     return None
 
 
-def _translate_sdl_event(str kind, int a=0, int b=0, int c=0, bytes text=b""):
-    """Test hook: build a raw SDL event and translate it as `poll_event()` does.
+def wait_event(timeout=None):
+    """Block until an event arrives or `timeout` seconds pass; return it or None.
 
+    Raises:
+        RuntimeError: If no renderer window exists.
+    """
+    cdef SDL_Event e
+    cdef Event ev
+    cdef int ms
+    _require_window()
+    deadline = None if timeout is None else time.monotonic() + max(timeout, 0)
+    while True:
+        if deadline is None:
+            ms = -1
+        else:
+            ms = max(0, min(int((deadline - time.monotonic()) * 1000 + 0.5), 0x7FFFFFFF))
+        if not SDL_WaitEventTimeout(&e, ms):
+            return None
+        ev = _translate_owned(&e)
+        if ev is not None:
+            return ev
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
+
+
+def _translate_sdl_event(str kind, int a=0, int b=0, int c=0, bytes text=b"", int d=0):
+    """Build a raw SDL event and translate it as `poll_event()` does.
+
+    Public as `pymui.testing.sdl_event`, which documents the arguments.
     Bypasses the SDL queue: sdl2-compat 2.32 crashes in SDL_PushEvent on text events.
     """
     cdef SDL_Event e
@@ -1994,13 +2298,16 @@ def _translate_sdl_event(str kind, int a=0, int b=0, int c=0, bytes text=b""):
         e.motion.x, e.motion.y = a, b
     elif kind == "down" or kind == "up":
         e.type = SDL_MOUSEBUTTONDOWN if kind == "down" else SDL_MOUSEBUTTONUP
-        e.button.button, e.button.x, e.button.y = a, b, c
+        e.button.button, e.button.x, e.button.y, e.button.clicks = a, b, c, d
     elif kind == "wheel":
         e.type = SDL_MOUSEWHEEL
-        e.wheel.y = a
+        e.wheel.y, e.wheel.x, e.wheel.direction = a, b, c
     elif kind == "keydown" or kind == "keyup":
         e.type = SDL_KEYDOWN if kind == "keydown" else SDL_KEYUP
-        e.key.keysym.sym = a
+        e.key.keysym.sym, e.key.keysym.mod = a, b
+    elif kind == "drop":
+        e.type = SDL_DROPFILE
+        e.drop.file = <char*>text  # borrowed from `text`; _translate does not free it
     elif kind == "text":
         e.type = SDL_TEXTINPUT
         memcpy(e.text.text, <const char*>text, min(len(text), sizeof(e.text.text) - 1))
@@ -2033,6 +2340,8 @@ def render(Context ctx, Color bg=None):
             r_draw_rect(cmd.rect.rect, cmd.rect.color)
         elif cmd.type == MU_COMMAND_ICON:
             r_draw_icon(cmd.icon.id, cmd.icon.rect, cmd.icon.color)
+        elif cmd.type == MU_COMMAND_IMAGE:
+            r_draw_image(cmd.image.id, cmd.image.rect, cmd.image.color)
         elif cmd.type == MU_COMMAND_CLIP:
             r_set_clip_rect(cmd.clip.rect)
     r_present()

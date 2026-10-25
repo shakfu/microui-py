@@ -23,6 +23,11 @@ cdef extern from "microui.h":
 
     # Enums
     cdef enum:
+        MU_TEXTOP_COPY
+        MU_TEXTOP_CUT
+        MU_TEXTOP_SELECTALL
+
+    cdef enum:
         MU_CLIP_PART = 1
         MU_CLIP_ALL
 
@@ -32,6 +37,7 @@ cdef extern from "microui.h":
         MU_COMMAND_RECT
         MU_COMMAND_TEXT
         MU_COMMAND_ICON
+        MU_COMMAND_IMAGE
         MU_COMMAND_MAX
 
     cdef enum:
@@ -97,6 +103,7 @@ cdef extern from "microui.h":
         MU_KEY_DOWN         = (1 << 10)
         MU_KEY_HOME         = (1 << 11)
         MU_KEY_END          = (1 << 12)
+        MU_KEY_TAB          = (1 << 13)
 
     # Forward declarations
     ctypedef struct mu_Context
@@ -156,6 +163,12 @@ cdef extern from "microui.h":
         int id
         mu_Color color
 
+    ctypedef struct mu_ImageCommand:
+        mu_BaseCommand base
+        mu_Rect rect
+        int id
+        mu_Color color
+
     # Command union
     ctypedef union mu_Command:
         int type
@@ -165,6 +178,7 @@ cdef extern from "microui.h":
         mu_RectCommand rect
         mu_TextCommand text
         mu_IconCommand icon
+        mu_ImageCommand image
 
     # Layout struct
     ctypedef struct mu_Layout:
@@ -250,6 +264,13 @@ cdef extern from "microui.h":
         mu_Container* scroll_target
         char number_edit_buf[MU_MAX_FMT]
         mu_Id number_edit
+        mu_Id caret_id
+        int caret
+        int anchor
+        int text_op
+        int clip_start
+        int clip_end
+        int selecting
         # stacks (using macro-generated structs)
         command_list_stack command_list;
         root_list_stack root_list;
@@ -315,6 +336,7 @@ cdef extern from "microui.h":
     void mu_draw_box(mu_Context* ctx, mu_Rect rect, mu_Color color)
     void mu_draw_text(mu_Context* ctx, mu_Font font, const char* str, int len, mu_Vec2 pos, mu_Color color)
     void mu_draw_icon(mu_Context* ctx, int id, mu_Rect rect, mu_Color color)
+    void mu_draw_image(mu_Context* ctx, int id, mu_Rect rect, mu_Color color)
 
     # Layout functions
     void mu_layout_row(mu_Context* ctx, int items, const int* widths, int height)
@@ -377,15 +399,23 @@ cdef extern from "renderer.h":
     void r_set_clip_rect(mu_Rect rect)
     void r_clear(mu_Color color)
     void r_present()
+    float r_get_scale()
+    int  r_generation()
+    unsigned r_image_create(const unsigned char *rgba, int w, int h)
+    int  r_image_update(unsigned id, const unsigned char *rgba, int w, int h)
+    void r_image_destroy(unsigned id)
+    void r_draw_image(unsigned id, mu_Rect rect, mu_Color color)
 
 cdef extern from "SDL2/SDL.h":
     ctypedef unsigned int Uint32
     ctypedef unsigned char Uint8
+    ctypedef unsigned short Uint16
     ctypedef int Sint32
     ctypedef Sint32 SDL_Keycode
 
     ctypedef struct SDL_Keysym:
         SDL_Keycode sym
+        Uint16 mod
     ctypedef struct SDL_KeyboardEvent:
         SDL_Keysym keysym
     ctypedef struct SDL_MouseMotionEvent:
@@ -393,12 +423,17 @@ cdef extern from "SDL2/SDL.h":
         Sint32 y
     ctypedef struct SDL_MouseButtonEvent:
         Uint8 button
+        Uint8 clicks
         Sint32 x
         Sint32 y
     ctypedef struct SDL_MouseWheelEvent:
+        Sint32 x
         Sint32 y
+        Uint32 direction
     ctypedef struct SDL_TextInputEvent:
         char text[32]
+    ctypedef struct SDL_DropEvent:
+        char* file
     ctypedef struct SDL_WindowEvent:
         Uint8 event
         Sint32 data1
@@ -411,11 +446,41 @@ cdef extern from "SDL2/SDL.h":
         SDL_MouseWheelEvent wheel
         SDL_TextInputEvent text
         SDL_WindowEvent window
+        SDL_DropEvent drop
 
     int SDL_InitSubSystem(Uint32 flags)
     void SDL_Quit()
     const char* SDL_GetError()
     int SDL_PollEvent(SDL_Event* event)
+    int SDL_WaitEventTimeout(SDL_Event* event, int timeout)
+    void SDL_free(void* mem)
+    char* SDL_GetClipboardText()
+    int SDL_SetClipboardText(const char* text)
+    ctypedef struct SDL_Cursor
+    ctypedef int SDL_SystemCursor
+    SDL_Cursor* SDL_CreateSystemCursor(SDL_SystemCursor id)
+    void SDL_SetCursor(SDL_Cursor* cursor)
+    Uint32 SDL_WasInit(Uint32 flags)
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_ARROW
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_IBEAM
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_WAIT
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_CROSSHAIR
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_SIZENWSE
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_SIZENESW
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_SIZEWE
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_SIZENS
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_SIZEALL
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_NO
+    cdef const SDL_SystemCursor SDL_SYSTEM_CURSOR_HAND
+    cdef const SDL_SystemCursor SDL_NUM_SYSTEM_CURSORS
+    cdef const Uint32 SDL_MOUSEWHEEL_FLIPPED
+    cdef const Uint32 SDL_DROPFILE
+    cdef const Uint16 KMOD_CTRL
+    cdef const Uint16 KMOD_ALT
+    cdef const Uint16 KMOD_GUI
+    cdef const Uint16 KMOD_SHIFT
+    cdef const Uint8 SDL_WINDOWEVENT_FOCUS_GAINED
+    cdef const Uint8 SDL_WINDOWEVENT_FOCUS_LOST
 
     cdef const Uint32 SDL_INIT_VIDEO
 
@@ -440,6 +505,7 @@ cdef extern from "SDL2/SDL.h":
     cdef const SDL_Keycode SDLK_DOWN
     cdef const SDL_Keycode SDLK_HOME
     cdef const SDL_Keycode SDLK_END
+    cdef const SDL_Keycode SDLK_TAB
 
     cdef const Uint32 SDL_QUIT
     cdef const Uint32 SDL_MOUSEMOTION

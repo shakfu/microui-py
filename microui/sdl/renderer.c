@@ -35,11 +35,14 @@ static int tex_ready;               /* tex_pixels holds the built-in atlas */
 static int tex_dirty;               /* tex_pixels differs from the GL texture */
 static GLuint tex_id;
 
+static GLuint cur_tex;              /* texture the queued quads sample */
+
 static unsigned char *font_data;    /* owned copy; stb_truetype keeps pointers */
 static stbtt_fontinfo font;
-static float font_scale;
-static int font_baseline;           /* ascent in pixels */
-static int font_line_height;
+static float font_scale;            /* font units to logical pixels */
+static float font_ascent;           /* in font units */
+static int font_baseline;           /* ascent in device pixels */
+static int font_line_height;        /* logical pixels */
 
 static Glyph glyphs[GLYPH_SLOTS];
 static int glyph_count;
@@ -50,8 +53,14 @@ static GLfloat  vert_buf[BUFFER_SIZE *  8];
 static GLubyte color_buf[BUFFER_SIZE * 16];
 static GLuint  index_buf[BUFFER_SIZE *  6];
 
+/* Logical window size. On HiDPI displays the drawable has `dpi` device
+** pixels per logical pixel; layout and input stay in logical pixels. */
 static int width  = 800;
 static int height = 600;
+static int fb_w   = 800;
+static int fb_h   = 600;
+static float dpi  = 1;
+static int generation;              /* bumped per window; image ids die with it */
 static int buf_idx;
 
 static SDL_Window *window;
@@ -132,7 +141,7 @@ static const Glyph *glyph_get(unsigned cp) {
     return glyph_get(cp);
   }
   index = stbtt_FindGlyphIndex(&font, (int) cp);
-  stbtt_GetGlyphBitmapBox(&font, index, font_scale, font_scale, &x0, &y0, &x1, &y1);
+  stbtt_GetGlyphBitmapBox(&font, index, font_scale * dpi, font_scale * dpi, &x0, &y0, &x1, &y1);
   w = x1 - x0;
   h2 = y1 - y0;
   if (w < 0 || h2 < 0 || w > TEX_W || h2 > TEX_H - ATLAS_HEIGHT) { w = h2 = 0; }
@@ -148,7 +157,7 @@ static const Glyph *glyph_get(unsigned cp) {
   }
   if (w > 0 && h2 > 0) {
     stbtt_MakeGlyphBitmap(&font, tex_pixels + pack_y * TEX_W + pack_x,
-                          w, h2, TEX_W, font_scale, font_scale, index);
+                          w, h2, TEX_W, font_scale * dpi, font_scale * dpi, index);
     tex_dirty = 1;
   }
   g->cp = cp;
@@ -211,7 +220,8 @@ int r_load_font(const unsigned char *data, int size, float px) {
   font = info;
   font_scale = stbtt_ScaleForPixelHeight(&font, px);
   stbtt_GetFontVMetrics(&font, &ascent, &descent, &gap);
-  font_baseline = (int) (ascent * font_scale + 0.5f);
+  font_ascent = ascent;
+  font_baseline = (int) (ascent * font_scale * dpi + 0.5f);
   font_line_height = (int) ((ascent - descent + gap) * font_scale + 0.5f);
   glyph_cache_reset();
   return 0;
@@ -231,6 +241,26 @@ int r_font_loaded(void) {
 }
 
 
+/* Re-read the drawable size; glyphs are re-rasterized when the scale changes. */
+static void update_scale(void) {
+  int win_w = width, win_h = height;
+  float s;
+  fb_w = width;
+  fb_h = height;
+  if (window) {
+    SDL_GetWindowSize(window, &win_w, &win_h);
+    SDL_GL_GetDrawableSize(window, &fb_w, &fb_h);
+  }
+  s = win_w > 0 && fb_w > 0 ? (float) fb_w / win_w : 1;
+  if (s == dpi) { return; }
+  dpi = s;
+  if (font_data) {
+    font_baseline = (int) (font_ascent * font_scale * dpi + 0.5f);
+    glyph_cache_reset();
+  }
+}
+
+
 void r_init(void) {
   r_init_window(NULL, width, height, 0);
 }
@@ -243,7 +273,8 @@ int r_init_window(const char *title, int w, int h, int resizable) {
   /* init SDL window */
   window = SDL_CreateWindow(
     title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-    width, height, SDL_WINDOW_OPENGL | (resizable ? SDL_WINDOW_RESIZABLE : 0));
+    width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI |
+    (resizable ? SDL_WINDOW_RESIZABLE : 0));
   if (!window) { return -1; }
   gl_context = SDL_GL_CreateContext(window);
   if (!gl_context) {
@@ -274,7 +305,10 @@ int r_init_window(const char *title, int w, int h, int resizable) {
   tex_dirty = 0;
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  cur_tex = tex_id;
   if (glGetError() != GL_NO_ERROR) { r_shutdown(); return -1; }
+  generation++;
+  update_scale();
   return 0;
 }
 
@@ -283,6 +317,17 @@ void r_resize(int w, int h) {
   flush();
   width = w;
   height = h;
+  update_scale();
+}
+
+
+float r_get_scale(void) {
+  return dpi;
+}
+
+
+int r_generation(void) {
+  return window ? generation : 0;
 }
 
 
@@ -290,6 +335,7 @@ void r_shutdown(void) {
   if (gl_context) { SDL_GL_DeleteContext(gl_context); gl_context = NULL; }
   if (window) { SDL_DestroyWindow(window); window = NULL; }
   buf_idx = 0;
+  update_scale();
 }
 
 
@@ -302,8 +348,9 @@ static void flush(void) {
       GL_ALPHA, GL_UNSIGNED_BYTE, tex_pixels);
     tex_dirty = 0;
   }
+  glBindTexture(GL_TEXTURE_2D, cur_tex);
 
-  glViewport(0, 0, width, height);
+  glViewport(0, 0, fb_w, fb_h);
   glMatrixMode(GL_PROJECTION);
   glPushMatrix();
   glLoadIdentity();
@@ -326,7 +373,9 @@ static void flush(void) {
 }
 
 
-static void push_quad(mu_Rect dst, mu_Rect src, mu_Color color) {
+/* Queue a quad at logical (x, y, w, h) sampling texture coords u0..u1, v0..v1. */
+static void push_quad_uv(float x, float y, float w, float h,
+                         float u0, float v0, float u1, float v1, mu_Color color) {
   if (buf_idx == BUFFER_SIZE) { flush(); }
 
   int texvert_idx = buf_idx *  8;
@@ -336,28 +385,24 @@ static void push_quad(mu_Rect dst, mu_Rect src, mu_Color color) {
   buf_idx++;
 
   /* update texture buffer */
-  float x = src.x / (float) TEX_W;
-  float y = src.y / (float) TEX_H;
-  float w = src.w / (float) TEX_W;
-  float h = src.h / (float) TEX_H;
-  tex_buf[texvert_idx + 0] = x;
-  tex_buf[texvert_idx + 1] = y;
-  tex_buf[texvert_idx + 2] = x + w;
-  tex_buf[texvert_idx + 3] = y;
-  tex_buf[texvert_idx + 4] = x;
-  tex_buf[texvert_idx + 5] = y + h;
-  tex_buf[texvert_idx + 6] = x + w;
-  tex_buf[texvert_idx + 7] = y + h;
+  tex_buf[texvert_idx + 0] = u0;
+  tex_buf[texvert_idx + 1] = v0;
+  tex_buf[texvert_idx + 2] = u1;
+  tex_buf[texvert_idx + 3] = v0;
+  tex_buf[texvert_idx + 4] = u0;
+  tex_buf[texvert_idx + 5] = v1;
+  tex_buf[texvert_idx + 6] = u1;
+  tex_buf[texvert_idx + 7] = v1;
 
   /* update vertex buffer */
-  vert_buf[texvert_idx + 0] = dst.x;
-  vert_buf[texvert_idx + 1] = dst.y;
-  vert_buf[texvert_idx + 2] = dst.x + dst.w;
-  vert_buf[texvert_idx + 3] = dst.y;
-  vert_buf[texvert_idx + 4] = dst.x;
-  vert_buf[texvert_idx + 5] = dst.y + dst.h;
-  vert_buf[texvert_idx + 6] = dst.x + dst.w;
-  vert_buf[texvert_idx + 7] = dst.y + dst.h;
+  vert_buf[texvert_idx + 0] = x;
+  vert_buf[texvert_idx + 1] = y;
+  vert_buf[texvert_idx + 2] = x + w;
+  vert_buf[texvert_idx + 3] = y;
+  vert_buf[texvert_idx + 4] = x;
+  vert_buf[texvert_idx + 5] = y + h;
+  vert_buf[texvert_idx + 6] = x + w;
+  vert_buf[texvert_idx + 7] = y + h;
 
   /* update color buffer */
   memcpy(color_buf + color_idx +  0, &color, 4);
@@ -375,8 +420,22 @@ static void push_quad(mu_Rect dst, mu_Rect src, mu_Color color) {
 }
 
 
+static void use_texture(GLuint id) {
+  if (cur_tex != id) { flush(); cur_tex = id; }
+}
+
+
+/* Queue a quad sampling `src` of the atlas texture. */
+static void push_quad(float x, float y, float w, float h, mu_Rect src, mu_Color color) {
+  use_texture(tex_id);
+  push_quad_uv(x, y, w, h,
+               src.x / (float) TEX_W, src.y / (float) TEX_H,
+               (src.x + src.w) / (float) TEX_W, (src.y + src.h) / (float) TEX_H, color);
+}
+
+
 void r_draw_rect(mu_Rect rect, mu_Color color) {
-  push_quad(rect, atlas[ATLAS_WHITE], color);
+  push_quad(rect.x, rect.y, rect.w, rect.h, atlas[ATLAS_WHITE], color);
 }
 
 
@@ -394,13 +453,16 @@ void r_draw_text(const char *text, mu_Vec2 pos, mu_Color color) {
     if (font_data) {
       const Glyph *g = glyph_get(cp);
       if (g->w > 0) {
-        mu_Rect dst = { (int) (pen + 0.5f) + g->xoff, pos.y + font_baseline + g->yoff, g->w, g->h };
-        push_quad(dst, mu_rect(g->x, g->y, g->w, g->h), color);
+        /* glyph bitmaps are in device pixels; snap them to the device grid */
+        float x = (float) (int) (pen * dpi + 0.5f) + g->xoff;
+        float y = (float) (int) (pos.y * dpi + 0.5f) + font_baseline + g->yoff;
+        push_quad(x / dpi, y / dpi, g->w / dpi, g->h / dpi,
+                  mu_rect(g->x, g->y, g->w, g->h), color);
       }
       pen += glyph_advance(cp);
     } else {
       mu_Rect src = builtin_glyph(cp);
-      push_quad(mu_rect((int) pen, pos.y, src.w, src.h), src, color);
+      push_quad((int) pen, pos.y, src.w, src.h, src, color);
       pen += src.w;
     }
   }
@@ -411,7 +473,7 @@ void r_draw_icon(int id, mu_Rect rect, mu_Color color) {
   mu_Rect src = atlas[id];
   int x = rect.x + (rect.w - src.w) / 2;
   int y = rect.y + (rect.h - src.h) / 2;
-  push_quad(mu_rect(x, y, src.w, src.h), src, color);
+  push_quad(x, y, src.w, src.h, src, color);
 }
 
 
@@ -436,8 +498,10 @@ int r_get_text_height(void) {
 
 
 void r_set_clip_rect(mu_Rect rect) {
+  int x0 = (int) (rect.x * dpi + 0.5f), x1 = (int) ((rect.x + rect.w) * dpi + 0.5f);
+  int y0 = (int) (rect.y * dpi + 0.5f), y1 = (int) ((rect.y + rect.h) * dpi + 0.5f);
   flush();
-  glScissor(rect.x, height - (rect.y + rect.h), rect.w, rect.h);
+  glScissor(x0, fb_h - y1, x1 - x0, y1 - y0);
 }
 
 
@@ -451,4 +515,54 @@ void r_clear(mu_Color clr) {
 void r_present(void) {
   flush();
   SDL_GL_SwapWindow(window);
+}
+
+
+unsigned r_image_create(const unsigned char *rgba, int w, int h) {
+  GLint max_size = 0;
+  GLuint id = 0;
+  if (!gl_context || !rgba || w <= 0 || h <= 0) { return 0; }
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
+  if (w > max_size || h > max_size) { return 0; }
+  flush();
+  while (glGetError() != GL_NO_ERROR) {}  /* drop stale errors */
+  glGenTextures(1, &id);
+  glBindTexture(GL_TEXTURE_2D, id);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+  glBindTexture(GL_TEXTURE_2D, cur_tex);
+  if (glGetError() != GL_NO_ERROR) {
+    glDeleteTextures(1, &id);
+    return 0;
+  }
+  return id;
+}
+
+
+int r_image_update(unsigned id, const unsigned char *rgba, int w, int h) {
+  if (!gl_context || !id || !rgba) { return -1; }
+  flush();
+  glBindTexture(GL_TEXTURE_2D, id);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+  glBindTexture(GL_TEXTURE_2D, cur_tex);
+  return glGetError() == GL_NO_ERROR ? 0 : -1;
+}
+
+
+void r_image_destroy(unsigned id) {
+  GLuint tex = id;
+  if (!gl_context || !id) { return; }
+  flush();
+  if (cur_tex == tex) { cur_tex = tex_id; }
+  glDeleteTextures(1, &tex);
+}
+
+
+void r_draw_image(unsigned id, mu_Rect rect, mu_Color color) {
+  if (!id) { return; }
+  use_texture(id);
+  push_quad_uv(rect.x, rect.y, rect.w, rect.h, 0, 0, 1, 1, color);
 }

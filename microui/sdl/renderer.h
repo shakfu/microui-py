@@ -18,6 +18,12 @@ void r_draw_icon(int id, mu_Rect rect, mu_Color color);
 void r_set_clip_rect(mu_Rect rect);
 void r_clear(mu_Color color);
 void r_present(void);
+float r_get_scale(void);
+ int r_generation(void);
+unsigned r_image_create(const unsigned char *rgba, int w, int h);
+ int r_image_update(unsigned id, const unsigned char *rgba, int w, int h);
+void r_image_destroy(unsigned id);
+void r_draw_image(unsigned id, mu_Rect rect, mu_Color color);
 
 #endif
 
